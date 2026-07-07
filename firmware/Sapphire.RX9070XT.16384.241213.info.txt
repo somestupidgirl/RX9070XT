@@ -1,0 +1,52 @@
+GPU Device Id: 0x1002 0x7550
+113-1E4893U-N8F
+1E489 Navi48 XTX G29502 AIB BKC091
+(C) 1988-2022, Advanced Micro Devices, Inc.
+ATOMBIOSBK-AMD VER023.008.000.068.000001
+NAVI48.bin
+00000000
+00132452
+shenghyu
+Sapphire_APM7546_G295XTX_16GB_BKC091_330
+Power Limit
+  PPT: 330 W
+Current Limit
+  GPU: 330 A
+  SOC: 84 A
+Thermal Limit
+  Edge: 110°C
+  Hotspot: 110°C
+  Hotspot G: 0°C
+  Hotspot M: 0°C
+  Memory: 108°C
+  VR Gfx: 105°C
+  VR Mem 1: 105°C
+  VR Mem 2: 105°C
+  VR SOC: 105°C
+  Shutdown Temp.: 118°C
+Fan Speed
+  Acoustic Target: 1750 RPM
+  Acoustic Limit: 5000 RPM
+  Speed at 100%: 5000 RPM
+  Fan Stop Supported: Yes
+Fan Target Temperature
+  Hotspot: 85°C
+  Memory: 95°C
+  VR Gfx: 95°C
+  VR Mem 1: 95°C
+  VR Mem 2: 95°C
+  VR SOC: 95°C
+Fan Stop (if all below)
+  Hotspot: 50°C
+  Memory: 65°C
+  VR Gfx: 65°C
+  VR Mem 1: 65°C
+  VR Mem 2: 65°C
+  VR SOC: 65°C
+Fan Start (if any higher)
+  Hotspot: 60°C
+  Memory: 80°C
+  VR Gfx: 80°C
+  VR Mem 1: 80°C
+  VR Mem 2: 80°C
+  VR SOC: 80°C
