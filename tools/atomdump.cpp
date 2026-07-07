@@ -99,9 +99,37 @@ int main(int argc, char **argv) {
 			printf("  %zu: %-11s objid=0x%04x encoder=0x%04x devtag=0x%04x\n",
 			       i, AtomBios::connectorName(type), paths[i].connectorObjId,
 			       paths[i].encoderObjId, paths[i].deviceTag);
+
+			AtomBios::PathRecords rec;
+			if (bios.getPathRecords(paths[i], rec)) {
+				printf("     i2c: id=0x%02x hw=%d ddc-line=%u   hpd: pin=%u state=%u\n",
+				       rec.i2cId, rec.i2cHwCapable, rec.ddcLine, rec.hpdPin, rec.hpdPlugState);
+				AtomBios::GpioPin ddc, hpd;
+				if (rec.hasI2c && bios.findGpioPin(static_cast<uint8_t>(0x90 | rec.ddcLine), ddc))
+					printf("     ddc gpio: reg_index=0x%05x (byte 0x%06x) shift=%u\n",
+					       ddc.regIndex, ddc.regIndex * 4, ddc.shift);
+				if (rec.hasHpd && bios.findGpioPin(rec.hpdPin, hpd))
+					printf("     hpd gpio: reg_index=0x%05x (byte 0x%06x) shift=%u\n",
+					       hpd.regIndex, hpd.regIndex * 4, hpd.shift);
+			} else {
+				fprintf(stderr, "FAIL: path %zu has no I2C/HPD records\n", i);
+				failures++;
+			}
 		}
 	} else {
 		fprintf(stderr, "FAIL: no display paths parsed\n");
+		failures++;
+	}
+
+	AtomBios::GpioPin pins[AtomBios::MaxGpioPins];
+	size_t np = bios.getGpioPins(pins, AtomBios::MaxGpioPins);
+	if (np) {
+		printf("\ngpio pin lut (%zu pins):\n", np);
+		for (size_t i = 0; i < np; i++)
+			printf("  gpio_id=0x%02x reg_index=0x%05x shift=%-2u mask_shift=%u\n",
+			       pins[i].gpioId, pins[i].regIndex, pins[i].shift, pins[i].maskShift);
+	} else {
+		fprintf(stderr, "FAIL: gpio pin lut not parsed\n");
 		failures++;
 	}
 

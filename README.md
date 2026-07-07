@@ -95,7 +95,12 @@ hardware; the `.rom` (NAVI48.bin AtomBIOS) in `../firmware` and the Linux
    device property (preferred) or the PCI expansion ROM, and publishes
    `AtomBIOS,*` properties on the framebuffer node.
 3. **Multiple connectors & EDID** — read EDID over DP/HDMI AUX, publish real
-   timings from `getInformationForDisplayMode`.
+   timings from `getInformationForDisplayMode`. *Prerequisite done:* the
+   parser now decodes each connector's record chain (I2C/AUX + HPD) and the
+   GPIO pin LUT, giving the DDC line and HPD pin register mapping per
+   connector (verified via `make test`: DP→ddc0/hpd1, DP→ddc1/hpd2,
+   HDMI→ddc2/hpd3, HDMI→ddc3/hpd4; DDC regs 0x5d91/95/99/9d, HPD bank
+   0x5db5). Next: drive those DC_GPIO registers / AUX engine over BAR5 MMIO.
 4. **Power / clocks** — SMU firmware handshake (see `../firmware` power tables)
    so the card is stable, not stuck at boot clocks.
 5. **Acceleration (huge)** — a real accelerator: GFX12 command processor, ring
@@ -111,6 +116,9 @@ hardware; the `.rom` (NAVI48.bin AtomBIOS) in `../firmware` and the Linux
 - [x] AtomBIOS parser (rom header, master data table, firmwareinfo,
       display paths) verified against the real ROM via `make test`
 - [x] Runtime VBIOS acquisition (`ATY,bin_image` property / expansion ROM)
+- [x] Per-connector DDC/AUX line + HPD pin mapping (path records +
+      gpio_pin_lut), published as `AtomBIOS,Connectors`
+- [x] Adopted console geometry published as `Console,*` registry properties
 - [ ] Verified booting to desktop on real RX 9070 XT hardware
 - [ ] Native mode setting (DCN 4.0.1)
 - [ ] Acceleration / Metal

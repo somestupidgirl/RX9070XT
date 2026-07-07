@@ -54,6 +54,15 @@ bool RX9070XTFB::captureConsoleInfo() {
 
 	FBLOG("console framebuffer: base=0x%llx %ux%u stride=%u depth=%u len=%llu",
 	      fbPhysBase, fbWidth, fbHeight, fbRowBytes, fbDepth, fbLength);
+
+	// Publish what we adopted so `ioreg -lw0` on the target shows the
+	// geometry without needing the kernel log.
+	setProperty("Console,BaseAddress", fbPhysBase, 64);
+	setProperty("Console,Width", static_cast<uint64_t>(fbWidth), 32);
+	setProperty("Console,Height", static_cast<uint64_t>(fbHeight), 32);
+	setProperty("Console,RowBytes", static_cast<uint64_t>(fbRowBytes), 32);
+	setProperty("Console,Depth", static_cast<uint64_t>(fbDepth), 32);
+	setProperty("Console,Length", fbLength, 64);
 	return true;
 }
 
@@ -144,15 +153,22 @@ void RX9070XTFB::publishVBIOSInfo() {
 	AtomBios::DisplayPath paths[AtomBios::MaxDisplayPaths];
 	size_t n = atomBios.getDisplayPaths(paths, AtomBios::MaxDisplayPaths);
 	if (n) {
-		// e.g. "DisplayPort,DisplayPort,HDMI-A,HDMI-A"
-		char list[128] {};
+		// e.g. "DisplayPort/ddc0/hpd1,DisplayPort/ddc1/hpd2,..."
+		char list[192] {};
 		for (size_t i = 0; i < n; i++) {
-			if (i) strlcat(list, ",", sizeof(list));
-			strlcat(list, AtomBios::connectorName(AtomBios::connectorType(paths[i].connectorObjId)),
-			        sizeof(list));
-			FBLOG("connector %zu: %s objid=0x%04x encoder=0x%04x devtag=0x%04x", i,
-			      AtomBios::connectorName(AtomBios::connectorType(paths[i].connectorObjId)),
-			      paths[i].connectorObjId, paths[i].encoderObjId, paths[i].deviceTag);
+			const char *name =
+			    AtomBios::connectorName(AtomBios::connectorType(paths[i].connectorObjId));
+
+			AtomBios::PathRecords rec {};
+			atomBios.getPathRecords(paths[i], rec);
+
+			char entry[48];
+			snprintf(entry, sizeof(entry), "%s%s/ddc%u/hpd%u",
+			         i ? "," : "", name, rec.ddcLine, rec.hpdPin);
+			strlcat(list, entry, sizeof(list));
+
+			FBLOG("connector %zu: %s objid=0x%04x encoder=0x%04x ddc-line=%u hpd-pin=%u", i,
+			      name, paths[i].connectorObjId, paths[i].encoderObjId, rec.ddcLine, rec.hpdPin);
 		}
 		setProperty("AtomBIOS,Connectors", list);
 		setProperty("AtomBIOS,ConnectorCount", static_cast<uint64_t>(n), 32);

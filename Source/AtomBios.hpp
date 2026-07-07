@@ -73,6 +73,32 @@ public:
 		uint16_t deviceTag;
 	};
 
+	// Per-connector wiring decoded from a path's record chain
+	// (atom_i2c_record + atom_hpd_int_record). ddcLine selects which DDC/AUX
+	// pair services the connector; hpdPin is the hot-plug detect pin id.
+	// Both index into the GPIO pin LUT (gpio_id 0x90+line for DDC, pin id
+	// for HPD).
+	struct PathRecords {
+		bool    hasI2c { false };
+		uint8_t i2cId  { 0 };         // raw i2c_id byte
+		bool    i2cHwCapable { false }; // bit 7 of i2c_id
+		uint8_t ddcLine { 0 };        // i2c_id & 0x0f
+		bool    hasHpd { false };
+		uint8_t hpdPin { 0 };
+		uint8_t hpdPlugState { 0 };
+	};
+
+	// One atom_gpio_pin_assignment from gpio_pin_lut v2.1 (8 bytes each).
+	// regIndex is a dword register index (byte address = regIndex * 4).
+	struct GpioPin {
+		uint32_t regIndex;
+		uint8_t  shift;
+		uint8_t  maskShift;
+		uint8_t  gpioId;
+	};
+
+	static constexpr size_t MaxGpioPins = 32;
+
 	enum ConnectorType : uint8_t {
 		ConnectorUnknown = 0,
 		ConnectorDP,        // object id low byte 0x13
@@ -113,6 +139,15 @@ public:
 	// Fills `paths` (up to maxPaths) from displayobjectinfo v1.5; returns the
 	// number of display paths, or 0 when the table is absent/unsupported.
 	size_t getDisplayPaths(DisplayPath *paths, size_t maxPaths) const;
+
+	// Walks a path's record chain (recordOffset is relative to the
+	// displayobjectinfo table) and extracts the I2C/AUX and HPD assignments.
+	bool getPathRecords(const DisplayPath &path, PathRecords &out) const;
+
+	// gpio_pin_lut v2.1 accessors; findGpioPin looks up one id (e.g.
+	// 0x90 + ddcLine for a DDC/AUX pair, or an HPD pin id).
+	size_t getGpioPins(GpioPin *pins, size_t maxPins) const;
+	bool   findGpioPin(uint8_t gpioId, GpioPin &out) const;
 
 	static ConnectorType connectorType(uint16_t connectorObjId);
 	static const char   *connectorName(ConnectorType type);

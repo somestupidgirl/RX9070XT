@@ -221,6 +221,88 @@ size_t AtomBios::getDisplayPaths(DisplayPath *paths, size_t maxPaths) const {
 	return count;
 }
 
+bool AtomBios::getPathRecords(const DisplayPath &path, PathRecords &out) const {
+	out = PathRecords {};
+
+	TableHeader th;
+	size_t table = dataTable(DisplayObjectInfo, &th);
+	if (!table || path.recordOffset == 0 || path.recordOffset >= th.size)
+		return false;
+
+	// Record chain: atom_common_record_header {u8 type; u8 size;} followed by
+	// the body; terminated by type 0/0xff. Verified types on this ROM:
+	// I2C (1): u8 i2c_id, u8 i2c_slave_addr
+	// HPD (2): u8 pin_id, u8 plugin_pin_state
+	size_t p = table + path.recordOffset;
+	size_t end = table + th.size;
+	while (p + 2 <= end) {
+		uint8_t rtype, rsize;
+		if (!readU8(p, rtype) || !readU8(p + 1, rsize))
+			return false;
+		if (rtype == 0 || rtype == 0xFF || rsize < 2 || p + rsize > end)
+			break;
+
+		if (rtype == 1 && rsize >= 4) {           // ATOM_I2C_RECORD_TYPE
+			uint8_t id;
+			if (readU8(p + 2, id)) {
+				out.hasI2c = true;
+				out.i2cId = id;
+				out.i2cHwCapable = (id & 0x80) != 0;
+				out.ddcLine = id & 0x0F;
+			}
+		} else if (rtype == 2 && rsize >= 4) {    // ATOM_HPD_INT_RECORD_TYPE
+			uint8_t pin, state;
+			if (readU8(p + 2, pin) && readU8(p + 3, state)) {
+				out.hasHpd = true;
+				out.hpdPin = pin;
+				out.hpdPlugState = state;
+			}
+		}
+		p += rsize;
+	}
+	return out.hasI2c || out.hasHpd;
+}
+
+size_t AtomBios::getGpioPins(GpioPin *pins, size_t maxPins) const {
+	if (!pins || maxPins == 0)
+		return 0;
+
+	TableHeader th;
+	size_t off = dataTable(GpioPinLut, &th);
+	if (!off || th.formatRev != 2 || th.size < 4 + 8)
+		return 0;
+
+	// atom_gpio_pin_assignment: u32 data_a_reg_index, u8 gpio_bitshift,
+	// u8 gpio_mask_bitshift, u8 gpio_id, u8 reserved — 8 bytes each.
+	size_t npins = (th.size - 4u) / 8;
+	size_t count = 0;
+	for (size_t i = 0; i < npins && count < maxPins; i++) {
+		size_t p = off + 4 + i * 8;
+		GpioPin pin {};
+		uint8_t resv;
+		if (!readU32(p, pin.regIndex) || !readU8(p + 4, pin.shift) ||
+		    !readU8(p + 5, pin.maskShift) || !readU8(p + 6, pin.gpioId) ||
+		    !readU8(p + 7, resv))
+			break;
+		if (pin.gpioId == 0)
+			continue;
+		pins[count++] = pin;
+	}
+	return count;
+}
+
+bool AtomBios::findGpioPin(uint8_t gpioId, GpioPin &out) const {
+	GpioPin pins[MaxGpioPins];
+	size_t n = getGpioPins(pins, MaxGpioPins);
+	for (size_t i = 0; i < n; i++) {
+		if (pins[i].gpioId == gpioId) {
+			out = pins[i];
+			return true;
+		}
+	}
+	return false;
+}
+
 AtomBios::ConnectorType AtomBios::connectorType(uint16_t connectorObjId) {
 	// Object id: bits 12-14 = object type (3 = connector), bits 8-11 = enum
 	// instance, low byte = connector object id (atombios object ids).
