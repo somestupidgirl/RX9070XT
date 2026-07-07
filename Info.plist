@@ -1,0 +1,83 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>en</string>
+	<key>CFBundleExecutable</key>
+	<string>RX9070XT</string>
+	<key>CFBundleIdentifier</key>
+	<string>com.hackintosh.RX9070XT</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>RX9070XT</string>
+	<key>CFBundlePackageType</key>
+	<string>KEXT</string>
+	<key>CFBundleShortVersionString</key>
+	<string>0.0.1</string>
+	<key>CFBundleVersion</key>
+	<string>0.0.1</string>
+	<key>CFBundleSignature</key>
+	<string>????</string>
+	<key>OSBundleRequired</key>
+	<string>Root</string>
+	<key>IOKitPersonalities</key>
+	<dict>
+		<!-- Lilu plugin personality: instantiates the plugin on IOResources
+		     so kern_start's pluginStart runs. -->
+		<key>RX9070XT</key>
+		<dict>
+			<key>CFBundleIdentifier</key>
+			<string>com.hackintosh.RX9070XT</string>
+			<key>IOClass</key>
+			<string>RX9070XT</string>
+			<key>IOMatchCategory</key>
+			<string>RX9070XT</string>
+			<key>IOProviderClass</key>
+			<string>IOResources</string>
+			<key>IOResourceMatch</key>
+			<string>IOKit</string>
+		</dict>
+		<!-- Framebuffer personality: matches the RX 9070 XT (Navi 48) PCI
+		     device. IOPCIPrimaryMatch is 0xDEVICEVENDOR = 0x7550 / 0x1002. -->
+		<key>RX9070XTFB</key>
+		<dict>
+			<key>CFBundleIdentifier</key>
+			<string>com.hackintosh.RX9070XT</string>
+			<key>IOClass</key>
+			<string>RX9070XTFB</string>
+			<key>IOProviderClass</key>
+			<string>IOPCIDevice</string>
+			<key>IOPCIPrimaryMatch</key>
+			<string>0x75501002</string>
+			<key>IOProbeScore</key>
+			<integer>200000</integer>
+			<key>IOMatchCategory</key>
+			<string>IOFramebuffer</string>
+			<!-- Properties merged onto our provider / published for tools. -->
+			<key>model</key>
+			<string>AMD Radeon RX 9070 XT</string>
+			<key>device_type</key>
+			<string>display</string>
+		</dict>
+	</dict>
+	<key>OSBundleLibraries</key>
+	<dict>
+		<key>as.vit9696.Lilu</key>
+		<string>1.6.0</string>
+		<key>com.apple.iokit.IOPCIFamily</key>
+		<string>1.0</string>
+		<key>com.apple.iokit.IOGraphicsFamily</key>
+		<string>1.0</string>
+		<key>com.apple.kpi.iokit</key>
+		<string>20.0.0</string>
+		<key>com.apple.kpi.libkern</key>
+		<string>20.0.0</string>
+		<key>com.apple.kpi.mach</key>
+		<string>20.0.0</string>
+		<key>com.apple.kpi.unsupported</key>
+		<string>20.0.0</string>
+	</dict>
+</dict>
+</plist>
