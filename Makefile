@@ -16,7 +16,6 @@ DEPLOY       := 11.0
 SDK          := $(shell xcrun --sdk macosx --show-sdk-path)
 
 MKSDK        := MacKernelSDK
-LILU         := Lilu/Lilu
 
 BUILD        := build
 KEXT         := $(BUILD)/$(PRODUCT).kext
@@ -28,11 +27,9 @@ CC           := clang
 
 # --- sources -----------------------------------------------------------------
 CXX_SRCS := \
-	Source/kern_start.cpp \
 	Source/RX9070XTFB.cpp \
 	Source/AtomBios.cpp \
-	Source/IpDiscovery.cpp \
-	$(LILU)/Library/plugin_start.cpp
+	Source/IpDiscovery.cpp
 
 C_SRCS := \
 	Source/kmod_info.c
@@ -46,11 +43,9 @@ COMMON_FLAGS := \
 	-target $(ARCH)-apple-macos$(DEPLOY) \
 	-isysroot $(SDK) \
 	-I$(MKSDK)/Headers \
-	-I$(LILU) \
 	-mmacosx-version-min=$(DEPLOY) \
 	-DKERNEL -DKERNEL_PRIVATE -DDRIVER_PRIVATE -DAPPLE -DNeXT \
 	-D_FORTIFY_SOURCE=0 \
-	-DPRODUCT_NAME=$(PRODUCT) -DMODULE_VERSION=$(VERSION) \
 	-nostdinc \
 	-fno-builtin -fno-common -fno-stack-protector -mkernel -fapple-kext \
 	-Wall -Os -g

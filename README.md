@@ -1,8 +1,18 @@
 # RX9070XT.kext
 
 A **non-accelerated framebuffer driver** for the AMD Radeon **RX 9070 XT**
-(Navi 48 / RDNA 4, PCI `0x1002:0x7550`) on x86_64 Hackintosh, built as a Lilu
-plugin against MacKernelSDK. Cross-compiles on Apple Silicon.
+(Navi 48 / RDNA 4, PCI `0x1002:0x7550`) on x86_64 Hackintosh, built as a
+standalone IOKit kext against MacKernelSDK. Cross-compiles on Apple Silicon.
+
+> **Why not a Lilu plugin / OpenCore injection?** An `IOFramebuffer` subclass
+> must link against `com.apple.iokit.IOGraphicsFamily`, which on Big Sur+
+> lives in the *System* kernel collection — OpenCore can only inject into the
+> *Boot* KC, so injection fails with "Dependency ... was not found" (verified
+> on hardware). This kext therefore installs to `/Library/Extensions`, where
+> `kmutil` links it into the Aux KC with IOGraphicsFamily available. That
+> environment cannot resolve OC-injected Lilu symbols either, so the kext is
+> deliberately Lilu-free; Lilu integration can return later as a separate
+> boot-KC plugin if kernel patching becomes necessary.
 
 > **Scope, honestly.** macOS has *no* driver for RDNA 3 or RDNA 4 — Apple's AMD
 > support ends at RDNA 2 (Navi 2x). This kext does **not** add Metal or GPU
@@ -36,10 +46,9 @@ add real hardware bring-up later (see Roadmap).
 | `Source/RX9070XTFB.{hpp,cpp}` | The `IOFramebuffer` subclass (the part that reaches the desktop). |
 | `Source/AtomBios.{hpp,cpp}` | Freestanding, bounds-checked AtomBIOS data-table parser (groundwork for native mode setting). |
 | `Source/IpDiscovery.{hpp,cpp}` | Parser for AMD's IP discovery binary — per-card IP versions and register segment bases (what amdgpu uses instead of hardcoded offsets). |
-| `Source/kern_start.cpp` | Lilu plugin entry (`PluginConfiguration`, `pluginStart`). |
 | `Source/kmod_info.c` | Hand-written kmod glue (Xcode normally generates this). |
 | `tools/atomdump.cpp` | Host harness: runs the kext's parser against the real ROM (`make test`). |
-| `Info.plist` | Two personalities: Lilu plugin + PCI framebuffer match. |
+| `Info.plist` | PCI framebuffer personality (`IOPCIPrimaryMatch 0x75501002`). |
 | `Makefile` | Cross-compiles x86_64 on any host, assembles the `.kext`. |
 
 ## Building (works on Apple Silicon)
@@ -63,22 +72,29 @@ file build/RX9070XT.kext/Contents/MacOS/RX9070XT   # Mach-O 64-bit kext bundle x
 
 ## Installing (on the Intel target)
 
-1. Put `Lilu.kext` **and** `RX9070XT.kext` in `EFI/OC/Kexts`, add both to your
-   OpenCore `config.plist` `Kernel > Add` (Lilu first — it must load before its
-   plugins).
-   Also inject the **full 2 MiB flash dump** (the `.rom` in `firmware/`) as
-   `ATY,bin_image` under the GPU's PciRoot path in `DeviceProperties` — the
-   IP discovery binary lives in the PSP region of the flash, which the PCI
-   expansion ROM does not expose, so register-base derivation only works with
-   the full dump.
-2. Recommended while bringing this up:
-   - `-v keepsyms=1` to see panics.
-   - `-rx9070xtdbg` to enable this plugin's debug logging, `-liludbgall` for
-     Lilu's.
-   - Consider `debug=0x100` and disabling other GPU-related kexts
-     (WhateverGreen) so nothing else fights over the device.
-3. Because this is unsigned/experimental, you'll want SIP configured for kext
-   testing (`csr-active-config`) on the target.
+1. **Do not add RX9070XT.kext to OpenCore `Kernel → Add`** — injection cannot
+   work (see box above). Instead, on the running system:
+
+   ```sh
+   sudo cp -R RX9070XT.kext /Library/Extensions/
+   sudo chown -R root:wheel /Library/Extensions/RX9070XT.kext
+   sudo chmod -R 755 /Library/Extensions/RX9070XT.kext
+   sudo kmutil install --volume-root / --update-all
+   sudo reboot
+   ```
+
+   SIP must permit unsigned kexts (`csr-active-config` with
+   `CSR_ALLOW_UNTRUSTED_KEXTS`; standard hackintosh values like `0x03000067`
+   qualify). If `kmutil` complains about approval, allow the extension in
+   System Preferences → Security & Privacy and re-run.
+
+2. Inject the **full 2 MiB flash dump** (the `.rom` in `firmware/`) as
+   `ATY,bin_image` under the GPU's PciRoot path in OpenCore
+   `DeviceProperties` — the IP discovery binary lives in the PSP region of
+   the flash, which the PCI expansion ROM does not expose.
+
+3. Recommended while bringing this up: `-v keepsyms=1` boot-args, and disable
+   other GPU-related kexts (WhateverGreen) so nothing fights over the device.
 
 **Do not install this on a machine you can't recover** — a misbehaving
 framebuffer kext can black-screen the boot. Keep a known-good EFI to swap back.
