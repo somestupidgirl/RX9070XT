@@ -94,6 +94,15 @@ class RX9070XTFB : public IOFramebuffer {
 	// the segment bases from the IP discovery table. Returns 0xFFFFFFFF if
 	// discovery is unavailable or the address is out of range.
 	uint32_t regReadDmu(uint8_t baseIdx, uint32_t dwordOffset) const;
+	// Write counterpart; returns false (and writes nothing) if discovery is
+	// unavailable or the address is out of range.
+	bool regWriteDmu(uint8_t baseIdx, uint32_t dwordOffset, uint32_t value);
+	// Experiment (boot-arg "rx9070xt-8bpc=1"): switch the active DP stream
+	// from 10 bpc to 8 bpc and update the MSA to match, testing whether the
+	// monitor's colour processing misclassifies the GOP's 10 bpc SDR signal.
+	// Bandwidth-reducing, so the link cannot overflow; a reboot restores the
+	// firmware configuration.
+	void tryForce8bpc();
 	void probeMemSize();
 	// Read-only: log the DCN output-pipe colour registers (surface format,
 	// output CSC, output formatter) so the channel-rotation/blue-offset can

@@ -302,6 +302,47 @@ void RX9070XTFB::dumpDCN() {
 	FBLOG("dcn: --- end register dump ---");
 }
 
+bool RX9070XTFB::regWriteDmu(uint8_t baseIdx, uint32_t dwordOffset, uint32_t value) {
+	uint32_t byteOffset;
+	if (!ipDiscovery.isValid() ||
+	    !ipDiscovery.regByteOffset(IpDiscovery::HwDmu, 0, baseIdx, dwordOffset, byteOffset))
+		return false;
+	if (!rmmio || byteOffset + 4 > rmmioSize)
+		return false;
+	rmmio[byteOffset / 4] = value;
+	return true;
+}
+
+void RX9070XTFB::tryForce8bpc() {
+	uint32_t v = 0;
+	if (!PE_parse_boot_argn("rx9070xt-8bpc", &v, sizeof(v)) || v == 0)
+		return;
+
+	// DP0 stream encoder (the active one on this machine).
+	constexpr uint32_t kDpPixelFormat   = 0x211f; // base 2
+	constexpr uint32_t kDpMsaColorimetry= 0x2120; // base 2
+	constexpr uint32_t kDepthMask       = 0x00000700; // UNCOMPRESSED_COMPONENT_DEPTH
+	constexpr uint32_t kDepth8bpc       = 1u << 8;
+	constexpr uint32_t kMisc0Mask       = 0xFF000000; // MISC0 in [31:24]
+	constexpr uint32_t kMisc0Rgb8bpc    = 0x20u << 24; // bits[7:5]=001 -> 8 bpc, RGB
+
+	uint32_t pf  = regReadDmu(2, kDpPixelFormat);
+	uint32_t col = regReadDmu(2, kDpMsaColorimetry);
+	if (pf == 0xFFFFFFFF || col == 0xFFFFFFFF) {
+		FBLOG("8bpc: register read failed, aborting");
+		return;
+	}
+
+	uint32_t pfNew  = (pf  & ~kDepthMask) | kDepth8bpc;
+	uint32_t colNew = (col & ~kMisc0Mask) | kMisc0Rgb8bpc;
+	FBLOG("8bpc: DP_PIXEL_FORMAT 0x%08x -> 0x%08x, MSA_COLORIMETRY 0x%08x -> 0x%08x",
+	      pf, pfNew, col, colNew);
+	regWriteDmu(2, kDpPixelFormat, pfNew);
+	regWriteDmu(2, kDpMsaColorimetry, colNew);
+	FBLOG("8bpc: readback DP_PIXEL_FORMAT=0x%08x MSA_COLORIMETRY=0x%08x",
+	      regReadDmu(2, kDpPixelFormat), regReadDmu(2, kDpMsaColorimetry));
+}
+
 void RX9070XTFB::probeMemSize() {
 	// RCC_DEV0_EPF0_RCC_CONFIG_MEMSIZE (NBIF 6.3.1 seg 2, dword 0x00c3):
 	// VRAM size in MiB — amdgpu's nbif_v6_3_1_get_memsize. The byte offset
@@ -399,6 +440,7 @@ bool RX9070XTFB::start(IOService *provider) {
 	if (mapRegisters()) {
 		probeMemSize();
 		dumpDCN();
+		tryForce8bpc();
 	}
 
 	if (!super::start(provider)) {
