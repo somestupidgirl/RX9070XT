@@ -69,3 +69,7 @@ vcpkg_installed/
 # test output & cache
 Testing/
 .cache/
+
+# R&D & reference files
+firmware/amd-ucode/*
+firmware/amdgpu/*
