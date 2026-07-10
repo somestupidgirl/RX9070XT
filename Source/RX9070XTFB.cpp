@@ -289,7 +289,16 @@ void RX9070XTFB::dumpDCN() {
 		FBLOG("dcn:   [%d] HUBP_surf=0x%08x DP_PIXEL_FORMAT=0x%08x DP_MSA_COLORIMETRY=0x%08x DIG_FE_CNTL=0x%08x",
 		      i, regReadDmu(2, hubpCfg[i]), regReadDmu(2, dp[i].pixFmt),
 		      regReadDmu(2, dp[i].colorimetry), regReadDmu(2, digFeCntl[i]));
-	FBLOG("dcn:   DP0_DP_MSA_MISC = 0x%08x", regReadDmu(2, 0x2124));
+	// MSA reads consistent (RGB 10bpc, MISC0=0x40 in COLORIMETRY[31:24]).
+	// Remaining GPU-side suspect: secondary data packets (VSC/GSP) that DP1.3+
+	// sinks may honor over the MSA. Dump the SDP enables and stream control.
+	FBLOG("dcn:   DP0_DP_MSA_MISC = 0x%08x (MISC1..4)", regReadDmu(2, 0x2124));
+	FBLOG("dcn:   DP0_DP_VID_STREAM_CNTL = 0x%08x", regReadDmu(2, 0x2122));
+	FBLOG("dcn:   DP0_DP_SEC_CNTL  = 0x%08x (GSP/VSC/ASP enables)", regReadDmu(2, 0x2141));
+	FBLOG("dcn:   DP0_DP_SEC_CNTL1 = 0x%08x", regReadDmu(2, 0x2142));
+	FBLOG("dcn:   DP0_DP_SEC_CNTL2 = 0x%08x", regReadDmu(2, 0x2169));
+	FBLOG("dcn:   DP0_DP_SEC_CNTL7 = 0x%08x", regReadDmu(2, 0x216e));
+	FBLOG("dcn:   DP0_DP_MSA_VBID_MISC = 0x%08x", regReadDmu(2, 0x2170));
 	FBLOG("dcn: --- end register dump ---");
 }
 
