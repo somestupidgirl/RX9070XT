@@ -46,9 +46,19 @@ class RX9070XTFB : public IOFramebuffer {
 	uint32_t            fbRowBytes { 0 };
 	uint32_t            fbDepth    { 32 };
 
-	// Diagnostic: boot-arg "rx9070xt-bgr=1" swaps the red/blue component
-	// masks reported to WindowServer, to test scanout byte-order mismatches.
-	bool swapRedBlue { false };
+	// Channel-order compensation. The Navi 48 DCN scanout maps framebuffer
+	// bytes to panel guns in an order that does not match the ARGB layout we
+	// advertise, so WindowServer's pixels come out channel-rotated. Since
+	// WindowServer writes bytes per the masks we report, permuting those
+	// masks pre-compensates. Selectable at runtime via boot-arg
+	// "rx9070xt-cmap=N" (no leading dash) while we pin down the right order.
+	//   0 = R:byte2 G:byte1 B:byte0  (standard ARGB, default)
+	//   1 = R:byte1 G:byte0 B:byte2  (cancels observed (G,B,R) rotation)
+	//   2 = R:byte0 G:byte1 B:byte2  (BGR swap)
+	//   3 = R:byte2 G:byte0 B:byte1
+	//   4 = R:byte1 G:byte2 B:byte0
+	//   5 = R:byte0 G:byte2 B:byte1
+	uint32_t channelMap { 0 };
 
 	// VBIOS image (owned copy) and its parsed view. Populated by loadVBIOS();
 	// absence is non-fatal — the framebuffer works without it, but connector
@@ -80,7 +90,15 @@ class RX9070XTFB : public IOFramebuffer {
 	// Bounds-checked 32-bit MMIO read; returns 0xFFFFFFFF (all-ones, the PCIe
 	// master-abort pattern) when unmapped or out of range.
 	uint32_t regRead32(uint32_t byteOffset) const;
+	// Read a DCN/DMU register by IP base-segment index + dword offset, using
+	// the segment bases from the IP discovery table. Returns 0xFFFFFFFF if
+	// discovery is unavailable or the address is out of range.
+	uint32_t regReadDmu(uint8_t baseIdx, uint32_t dwordOffset) const;
 	void probeMemSize();
+	// Read-only: log the DCN output-pipe colour registers (surface format,
+	// output CSC, output formatter) so the channel-rotation/blue-offset can
+	// be located before any register is written. Writes nothing to hardware.
+	void dumpDCN();
 
 public:
 	// IOService

@@ -253,6 +253,48 @@ uint32_t RX9070XTFB::regRead32(uint32_t byteOffset) const {
 	return rmmio[byteOffset / 4];
 }
 
+uint32_t RX9070XTFB::regReadDmu(uint8_t baseIdx, uint32_t dwordOffset) const {
+	uint32_t byteOffset;
+	if (!ipDiscovery.isValid() ||
+	    !ipDiscovery.regByteOffset(IpDiscovery::HwDmu, 0, baseIdx, dwordOffset, byteOffset))
+		return 0xFFFFFFFF;
+	return regRead32(byteOffset);
+}
+
+void RX9070XTFB::dumpDCN() {
+	if (!ipDiscovery.isValid()) {
+		FBLOG("dcn: no discovery bases, skipping register dump");
+		return;
+	}
+
+	// DCN 4.1.0 (Navi 48) output-pipe registers, pipe/instance 0.
+	// {name, base_idx, dword offset} — offsets from Linux dcn_4_1_0_offset.h.
+	// This is the console pipe the firmware lit up; if these read as identity
+	// we will widen to pipes 1-3.
+	struct Reg { const char *name; uint8_t base; uint32_t off; };
+	static const Reg regs[] = {
+		{ "OTG0_OTG_CONTROL",          2, 0x1b43 }, // is pipe 0 the active timing gen?
+		{ "CNVC0_SURFACE_PIXEL_FORMAT",2, 0x0ccf }, // DPP byte->component decode (rotation suspect #1)
+		{ "HUBP0_DCSURF_SURFACE_CONFIG",2, 0x05e5 },
+		{ "MPCC0_MPCC_CONTROL",        3, 0x0003 },
+		{ "MPC_OUT0_CSC_MODE",         3, 0x030b }, // output CSC enable (rotation suspect #2)
+		{ "MPC_OUT0_CSC_C11_C12_A",    3, 0x030c }, // CSC matrix rows — a permutation shows here
+		{ "MPC_OUT0_CSC_C13_C14_A",    3, 0x030d },
+		{ "MPC_OUT0_CSC_C21_C22_A",    3, 0x030e },
+		{ "MPC_OUT0_CSC_C23_C24_A",    3, 0x030f },
+		{ "MPC_OUT0_CSC_C31_C32_A",    3, 0x0310 },
+		{ "MPC_OUT0_CSC_C33_C34_A",    3, 0x0311 }, // C34 = blue/output offset (blue-cast suspect)
+		{ "FMT0_FMT_CONTROL",          2, 0x1840 }, // pixel encoding / dither
+		{ "FMT0_FMT_DYNAMIC_EXP_CNTL", 2, 0x183f }, // RGB range (limited/full) — blue-cast suspect
+		{ "OPP_PIPE0_OPP_PIPE_CONTROL",2, 0x188c },
+	};
+
+	FBLOG("dcn: register dump (DMU bases seg2/seg3, read-only) ---");
+	for (auto &r : regs)
+		FBLOG("dcn:   %-30s = 0x%08x", r.name, regReadDmu(r.base, r.off));
+	FBLOG("dcn: --- end register dump ---");
+}
+
 void RX9070XTFB::probeMemSize() {
 	// RCC_DEV0_EPF0_RCC_CONFIG_MEMSIZE (NBIF 6.3.1 seg 2, dword 0x00c3):
 	// VRAM size in MiB — amdgpu's nbif_v6_3_1_get_memsize. The byte offset
@@ -287,6 +329,15 @@ void RX9070XTFB::probeMemSize() {
 // ---------------------------------------------------------------------------
 
 IOService *RX9070XTFB::probe(IOService *provider, SInt32 *score) {
+	// Kill switch: boot-arg "rx9070xt-off=1" (no leading dash) disables the
+	// driver without removing it, so a bad build can be recovered from the
+	// OpenCore boot-args instead of Safe Mode / filesystem surgery.
+	uint32_t off = 0;
+	if (PE_parse_boot_argn("rx9070xt-off", &off, sizeof(off)) && off != 0) {
+		FBLOG("disabled by rx9070xt-off boot-arg");
+		return nullptr;
+	}
+
 	if (!super::probe(provider, score))
 		return nullptr;
 
@@ -316,10 +367,10 @@ bool RX9070XTFB::start(IOService *provider) {
 		return false;
 	}
 
-	uint32_t bgr = 0;
-	if (PE_parse_boot_argn("rx9070xt-bgr", &bgr, sizeof(bgr)) && bgr != 0) {
-		swapRedBlue = true;
-		FBLOG("start: swapping R/B component masks (rx9070xt-bgr)");
+	uint32_t cmap = 0;
+	if (PE_parse_boot_argn("rx9070xt-cmap", &cmap, sizeof(cmap)) && cmap <= 5) {
+		channelMap = cmap;
+		FBLOG("start: using channel map %u", channelMap);
 	}
 
 	// Grab the bootloader-provided framebuffer before anything else touches it.
@@ -336,9 +387,12 @@ bool RX9070XTFB::start(IOService *provider) {
 	// mode-setting work. The framebuffer itself does not depend on this.
 	loadVBIOS();
 
-	// Best effort: prove register MMIO works with one safe read (VRAM size).
-	if (mapRegisters())
+	// Best effort: prove register MMIO works with one safe read (VRAM size),
+	// then dump the DCN output-colour registers (read-only) for diagnosis.
+	if (mapRegisters()) {
 		probeMemSize();
+		dumpDCN();
+	}
 
 	if (!super::start(provider)) {
 		FBLOG("start: super::start failed");
@@ -450,12 +504,37 @@ IOReturn RX9070XTFB::getPixelInformation(IODisplayModeID displayMode, IOIndex de
 	pixelInfo->pixelType        = kIORGBDirectPixels;
 	pixelInfo->componentCount   = 3;
 	pixelInfo->bitsPerComponent = 8;
-	// ARGB8888 / XRGB8888 little-endian: R,G,B masks. rx9070xt-bgr swaps
-	// R and B for scanout byte-order diagnostics.
-	pixelInfo->componentMasks[0] = swapRedBlue ? 0x000000FF : 0x00FF0000; // R
-	pixelInfo->componentMasks[1] = 0x0000FF00;                            // G
-	pixelInfo->componentMasks[2] = swapRedBlue ? 0x00FF0000 : 0x000000FF; // B
-	strlcpy(pixelInfo->pixelFormat, IO32BitDirectPixels, sizeof(pixelInfo->pixelFormat));
+
+	// Which memory byte (0=LSB..2) each colour component occupies, per the
+	// active channel map. Index [channelMap] -> {byteForR, byteForG, byteForB}.
+	static const uint8_t kMaps[6][3] = {
+		{2, 1, 0},  // 0: standard ARGB (RGB in bytes 2,1,0)
+		{1, 0, 2},  // 1: cancels observed (G,B,R) rotation
+		{0, 1, 2},  // 2: BGR swap
+		{2, 0, 1},  // 3
+		{1, 2, 0},  // 4
+		{0, 2, 1},  // 5
+	};
+	uint32_t idx = channelMap <= 5 ? channelMap : 0;
+	uint8_t byteR = kMaps[idx][0], byteG = kMaps[idx][1], byteB = kMaps[idx][2];
+
+	pixelInfo->componentMasks[0] = 0xFFu << (byteR * 8); // R
+	pixelInfo->componentMasks[1] = 0xFFu << (byteG * 8); // G
+	pixelInfo->componentMasks[2] = 0xFFu << (byteB * 8); // B
+
+	// Build a matching IOPixelEncoding string (MSB byte first). Some
+	// CoreGraphics paths key off this rather than the masks, so keep both
+	// consistent. Byte 3 is unused (X).
+	char letters[4] = { '-', '-', '-', '-' };  // index = byte number (0..3)
+	letters[byteR] = 'R';
+	letters[byteG] = 'G';
+	letters[byteB] = 'B';
+	char *p = pixelInfo->pixelFormat;
+	for (int b = 3; b >= 0; b--)
+		for (int i = 0; i < 8; i++)
+			*p++ = letters[b];
+	*p = '\0';
+
 	pixelInfo->activeWidth  = fbWidth;
 	pixelInfo->activeHeight = fbHeight;
 	return kIOReturnSuccess;
