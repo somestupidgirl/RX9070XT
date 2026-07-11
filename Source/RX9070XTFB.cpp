@@ -562,6 +562,12 @@ void RX9070XTFB::probeEDID() {
 		return;
 	}
 
+	// Hot-plug detect pin states (DC_GPIO_HPD_Y, hpd1-4 at bits 0/8/16/24):
+	// distinguishes "no monitor asserting presence" from engine failures.
+	uint32_t hpdY = regReadDmu(2, 0x28f7);
+	FBLOG("edid: HPD_Y=0x%08x (hpd1=%u hpd2=%u hpd3=%u hpd4=%u)", hpdY,
+	      (hpdY >> 0) & 1, (hpdY >> 8) & 1, (hpdY >> 16) & 1, (hpdY >> 24) & 1);
+
 	AtomBios::DisplayPath paths[AtomBios::MaxDisplayPaths];
 	size_t n = atomBios.getDisplayPaths(paths, AtomBios::MaxDisplayPaths);
 	bool any = false;
@@ -672,8 +678,14 @@ constexpr uint32_t kI2cSwTimeout      = 1u << 5;
 constexpr uint32_t kI2cSwOverflow     = 1u << 7;
 constexpr uint32_t kI2cStoppedOnNack  = 1u << 8;
 // DC_I2C_DDCx_SETUP fields (DCN values: TIME_LIMIT 3, 9-bit send-reset).
+constexpr uint32_t kI2cSetupClkEn     = 1u << 3;   // dcn4.1: engine clock gate
 constexpr uint32_t kI2cSetupEnable    = 1u << 6;
-constexpr uint32_t kI2cSetupValue     = kI2cSetupEnable | (1u << 2) | (3u << 24);
+constexpr uint32_t kI2cSetupValue     = kI2cSetupEnable | kI2cSetupClkEn |
+                                        (1u << 2) | (3u << 24);
+// DIO memory low-power control: I2C engine RAM must be out of light sleep
+// before the engine responds (DIO_MEM_PWR_CTRL/STATUS bit 0).
+constexpr uint32_t kDioMemPwrStatus   = 0x1edd;
+constexpr uint32_t kDioMemPwrCtrl     = 0x1ede;
 // DC_I2C_DDCx_SPEED fields.
 constexpr uint32_t kI2cSpeed100kHz    = 100;     // kHz, amdgpu's DCN default
 // DC_I2C_TRANSACTIONx fields.
@@ -700,18 +712,35 @@ bool RX9070XTFB::readEDIDI2C(uint8_t line, uint8_t *edid, size_t count,
 	const uint32_t rSetup = kI2cSetupBase + 2u * line;
 	const uint32_t rSpeed = kI2cSpeedBase + 2u * line;
 
+	// --- wake the engine BEFORE acquiring (dce_i2c_hw setup_engine order).
+	// A never-used engine sits in soft reset with its registers write-blocked
+	// (arbitration reads 0 and ignores requests — observed on hardware), and
+	// its RAM may be in light sleep.
+	regWriteDmu(2, kI2cControl, 0);                 // deassert DC_I2C_SOFT_RESET
+	uint32_t memPwr = regReadDmu(2, kDioMemPwrCtrl);
+	if (memPwr != 0xFFFFFFFF && (memPwr & 1)) {
+		regWriteDmu(2, kDioMemPwrCtrl, memPwr & ~1u);  // unforce light sleep
+		for (int i = 0; i < 10 && (regReadDmu(2, kDioMemPwrStatus) & 1); i++)
+			IODelay(1);
+	}
+	regWriteDmu(2, rSetup, regReadDmu(2, rSetup) | kI2cSetupClkEn);
+
 	// --- acquire (dce_i2c_hw acquire_engine) ---
 	uint32_t arb = regReadDmu(2, kI2cArbitration);
 	if (arb == 0xFFFFFFFF)
 		return false;
 	uint32_t owner = (arb & kI2cRwStatusMask) >> kI2cRwStatusShift;
-	if (owner == 2)          // hardware/DMCU owns the engine
+	if (owner == 2) {        // hardware/DMCU owns the engine
+		FBLOG("i2c: line %u: engine owned by HW/DMCU (arb=0x%08x)", line, arb);
 		return false;
+	}
 	if (owner != 1) {
 		regWriteDmu(2, kI2cArbitration, arb | kI2cSwUseReq);
 		arb = regReadDmu(2, kI2cArbitration);
-		if (((arb & kI2cRwStatusMask) >> kI2cRwStatusShift) != 1)
+		if (((arb & kI2cRwStatusMask) >> kI2cRwStatusShift) != 1) {
+			FBLOG("i2c: line %u: SW acquire not granted (arb=0x%08x)", line, arb);
 			return false;
+		}
 	}
 	auto release = [&]() {
 		// Soft reset is safe while SW owns the engine; DONE_USING clears
@@ -768,8 +797,10 @@ bool RX9070XTFB::readEDIDI2C(uint8_t line, uint8_t *edid, size_t count,
 		IODelay(10);
 	}
 	if (!done || (sts & (kI2cStoppedOnNack | kI2cSwTimeout | kI2cSwAborted | kI2cSwOverflow))) {
+		FBLOG("i2c: line %u: transaction failed (sw_status=0x%08x%s)", line, sts,
+		      (sts & kI2cStoppedOnNack) ? ", NACK" : !done ? ", poll timeout" : "");
 		release();
-		return false;   // NACK = nothing connected on this line
+		return false;
 	}
 
 	// --- read the reply FIFO (process_channel_reply): the read data starts
