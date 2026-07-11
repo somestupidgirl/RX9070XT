@@ -127,13 +127,20 @@ class RX9070XTFB : public IOFramebuffer {
 	int auxTransaction(uint8_t inst, uint8_t action, uint32_t address,
 	                   const uint8_t *data, uint8_t len,
 	                   uint8_t *reply, uint8_t replyCap, uint8_t *replyBytes);
-	// Read `edidLen` bytes of EDID over I2C-over-AUX (DDC slave 0x50) from the
-	// sink on engine `inst`. Returns true and fills `edid` on success.
-	bool readEDID(uint8_t inst, uint8_t *edid, size_t edidLen);
-	// Boot-arg "rx9070xt-edid=1": probe each DisplayPort connector's AUX engine
-	// for an EDID, validate/decode it and log + publish it. Read-only diagnostic
-	// — issues only AUX transactions, never reprograms scanout.
+	// Read `count` bytes of EDID over I2C-over-AUX (DDC slave 0x50) from the
+	// sink on engine `inst`, starting at EDID byte `start` (0 for the base
+	// block, 128 for the first extension). Returns true and fills `edid`.
+	bool readEDID(uint8_t inst, uint8_t *edid, size_t count, uint8_t start);
+	// Probe each DisplayPort connector's AUX engine for an EDID, validate and
+	// publish it, and cache the first hit for the DDC API below. Issues only
+	// AUX transactions, never reprograms scanout. Runs by default (verified on
+	// hardware 2026-07-11); "rx9070xt-noedid=1" skips it.
 	void probeEDID();
+
+	// EDID served to IODisplay via hasDDCConnect()/getDDCBlock(): base block
+	// plus one CTA extension if present. 0 length = no DDC sink found.
+	uint8_t edidData[256] {};
+	size_t  edidLen { 0 };
 
 public:
 	// IOService
@@ -171,6 +178,13 @@ public:
 	                                      uintptr_t *value) override;
 	IOReturn    setAttributeForConnection(IOIndex connectIndex, IOSelect attribute,
 	                                      uintptr_t value) override;
+
+	// IOFramebuffer — DDC/EDID (serves the block cached by probeEDID so the
+	// OS sees the real display identity instead of a generic panel)
+	bool     hasDDCConnect(IOIndex connectIndex) override;
+	IOReturn getDDCBlock(IOIndex connectIndex, UInt32 blockNumber,
+	                     IOSelect blockType, IOOptionBits options,
+	                     UInt8 *data, IOByteCount *length) override;
 
 	// Report that this framebuffer's console is already usable so IOGraphics
 	// does not attempt to reprogram hardware we cannot drive.

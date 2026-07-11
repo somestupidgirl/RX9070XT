@@ -64,6 +64,7 @@ All parsed without a leading dash (`name=1`, not `-name=1`):
 | `rx9070xt-cmap=N` | Diagnostic: permute the advertised R/G/B component masks (0–5). Note: WindowServer ignores these for 32-bit modes; kept for documentation of that finding. |
 | `rx9070xt-lutbypass=1` | Force the MPC MCM stages (shaper/3D LUT/1D LUT) to bypass on all pipes. |
 | `rx9070xt-8bpc=1` | Experiment: switch the active DP stream 10 bpc → 8 bpc and update the MSA to match (first proven live register write). |
+| `rx9070xt-noedid=1` | Skip the EDID-over-AUX probe (default on; verified on hardware 2026-07-11). Use if a sink misbehaves on DDC. |
 
 ## Files
 
@@ -133,14 +134,12 @@ hardware; the `.rom` (NAVI48.bin AtomBIOS) in `../firmware` and the Linux
 
 1. ~~**Confirm scanout adoption**~~ — **done.** Desktop verified on hardware
    with correct colors (after masking the `v_baseAddr` flag bits).
-2. **EDID over DP AUX** *(next)* — read each sink's EDID using the AUX engine
-   at the DDC registers already mapped per connector, publish real display
-   identity/timings instead of the generic `'unkn'` display. Gateway to both
-   multi-display and display power management. *Prerequisites done:* the
-   connector→DDC/HPD map (DP→ddc0/hpd1, DP→ddc1/hpd2, HDMI→ddc2/hpd3,
-   HDMI→ddc3/hpd4; DDC regs 0x5d91/95/99/9d, HPD bank 0x5db5, verified via
-   `make test`) and a proven BAR5 read/write path with discovery-derived
-   addressing.
+2. ~~**EDID over DP AUX**~~ — **done.** The AUX software engine
+   (`auxTransaction`, following amdgpu's `dce_aux.c`) reads each DP sink's
+   EDID over I2C-over-AUX; verified on hardware 2026-07-11 (Samsung 4K sink
+   on AUX0). The EDID (base + CTA extension) is served to IODisplay via
+   `hasDDCConnect()`/`getDDCBlock()` so macOS sees the real display identity.
+   *Remaining:* HDMI sinks (EDID lives on the DDC I2C engine, not AUX).
 3. **Native mode setting (DCN 4.1.0)** — program HUBP/DPP/OPP/OTG to change
    resolution and light additional connectors; this is where
    `enableController()` stops being a no-op. The register-offset workflow
@@ -172,7 +171,8 @@ hardware; the `.rom` (NAVI48.bin AtomBIOS) in `../firmware` and the Linux
 - [x] BAR5 register MMIO confirmed on hardware, read (VRAM size, DCN dumps)
       and write (DP stream registers, MCM bypass)
 - [x] Kill-switch boot-arg (`rx9070xt-off=1`) for safe iteration
-- [ ] EDID over DP AUX (next)
+- [x] DP AUX software engine + EDID read over I2C-over-AUX (verified on
+      hardware: Samsung 4K sink on AUX0), served via `getDDCBlock()`
 - [ ] Native mode setting (DCN 4.1.0) / multiple displays
 - [ ] Display sleep / power management
 - [ ] Acceleration / Metal

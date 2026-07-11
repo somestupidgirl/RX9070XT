@@ -509,15 +509,15 @@ int RX9070XTFB::auxTransaction(uint8_t inst, uint8_t action, uint32_t address,
 	return replyCode;
 }
 
-bool RX9070XTFB::readEDID(uint8_t inst, uint8_t *edid, size_t edidLen) {
+bool RX9070XTFB::readEDID(uint8_t inst, uint8_t *edid, size_t count,
+                          uint8_t start) {
 	uint8_t rb = 0;
 
-	// Point the sink's read pointer at offset 0 with an I2C write. MOT keeps
+	// Point the sink's read pointer at `start` with an I2C write. MOT keeps
 	// the I2C START asserted across the reads that follow.
-	uint8_t offset = 0;
 	bool ok = false;
 	for (uint8_t t = 0; t < kAuxRetry; t++) {
-		int rc = auxTransaction(inst, kActI2CWriteMot, kDdcSlave, &offset, 1,
+		int rc = auxTransaction(inst, kActI2CWriteMot, kDdcSlave, &start, 1,
 		                        nullptr, 0, &rb);
 		if (rc == kReplyAck) { ok = true; break; }
 		if (rc < 0) return false;
@@ -528,9 +528,9 @@ bool RX9070XTFB::readEDID(uint8_t inst, uint8_t *edid, size_t edidLen) {
 
 	// Sequential 16-byte I2C reads (the AUX data FIFO limit); drop MOT on the
 	// final chunk to issue the I2C STOP.
-	for (size_t pos = 0; pos < edidLen; ) {
-		uint8_t chunk = (edidLen - pos) > 16 ? 16 : static_cast<uint8_t>(edidLen - pos);
-		bool last = (pos + chunk) >= edidLen;
+	for (size_t pos = 0; pos < count; ) {
+		uint8_t chunk = (count - pos) > 16 ? 16 : static_cast<uint8_t>(count - pos);
+		bool last = (pos + chunk) >= count;
 		uint8_t act = last ? kActI2CRead : kActI2CReadMot;
 		bool got = false;
 		for (uint8_t t = 0; t < kAuxRetry; t++) {
@@ -548,9 +548,13 @@ bool RX9070XTFB::readEDID(uint8_t inst, uint8_t *edid, size_t edidLen) {
 }
 
 void RX9070XTFB::probeEDID() {
-	uint32_t on = 0;
-	if (!PE_parse_boot_argn("rx9070xt-edid", &on, sizeof(on)) || on == 0)
+	// Default-on since the AUX path was verified on hardware (2026-07-11);
+	// "rx9070xt-noedid=1" opts out if a sink misbehaves.
+	uint32_t noedid = 0;
+	if (PE_parse_boot_argn("rx9070xt-noedid", &noedid, sizeof(noedid)) && noedid != 0) {
+		FBLOG("edid: probing disabled by rx9070xt-noedid");
 		return;
+	}
 	if (!ipDiscovery.isValid() || !rmmio) {
 		FBLOG("edid: MMIO/discovery unavailable, skipping");
 		return;
@@ -572,7 +576,7 @@ void RX9070XTFB::probeEDID() {
 		uint8_t inst = rec.ddcLine;  // AUX engine index == DDC line on this board
 
 		uint8_t edid[128] {};
-		if (!readEDID(inst, edid, sizeof(edid))) {
+		if (!readEDID(inst, edid, sizeof(edid), 0)) {
 			FBLOG("edid: connector %zu (AUX%u): no reply", i, inst);
 			continue;
 		}
@@ -605,6 +609,21 @@ void RX9070XTFB::probeEDID() {
 		setProperty(key, edid, sizeof(edid));
 		snprintf(key, sizeof(key), "EDID,AUX%u-Vendor", inst);
 		setProperty(key, mfg);
+
+		// Cache the first sink's EDID for hasDDCConnect()/getDDCBlock(). Only
+		// the boot display is scanned out, and that is AUX0/DP0 on this board.
+		if (edidLen == 0) {
+			memcpy(edidData, edid, 128);
+			edidLen = 128;
+			// One CTA extension block is the norm on EDID 1.4 sinks; fetch it
+			// so the OS sees the full timing/audio capabilities.
+			if (edid[126] > 0 &&
+			    readEDID(inst, edidData + 128, 128, 128)) {
+				edidLen = 256;
+				FBLOG("edid: connector %zu (AUX%u): read extension block "
+				      "(tag 0x%02x)", i, inst, edidData[128]);
+			}
+		}
 	}
 	if (!any)
 		FBLOG("edid: no DisplayPort EDID read (HDMI DDC over I2C not yet supported)");
@@ -946,6 +965,10 @@ IOReturn RX9070XTFB::getAttributeForConnection(IOIndex connectIndex, IOSelect at
 		case kConnectionFlags:
 			if (value) *value = 0;
 			return kIOReturnSuccess;
+		case kConnectionSupportsHLDDCSense:
+			// Success (no value) tells IODisplay it may call hasDDCConnect()
+			// and getDDCBlock() for the real EDID.
+			return edidLen ? kIOReturnSuccess : kIOReturnUnsupported;
 		default:
 			return super::getAttributeForConnection(connectIndex, attribute, value);
 	}
@@ -960,4 +983,29 @@ IOReturn RX9070XTFB::setAttributeForConnection(IOIndex connectIndex, IOSelect at
 		default:
 			return super::setAttributeForConnection(connectIndex, attribute, value);
 	}
+}
+
+// ---------------------------------------------------------------------------
+// IOFramebuffer — DDC/EDID
+// ---------------------------------------------------------------------------
+
+bool RX9070XTFB::hasDDCConnect(IOIndex connectIndex) {
+	return connectIndex == 0 && edidLen != 0;
+}
+
+IOReturn RX9070XTFB::getDDCBlock(IOIndex connectIndex, UInt32 blockNumber,
+                                 IOSelect blockType, IOOptionBits options,
+                                 UInt8 *data, IOByteCount *length) {
+	if (connectIndex != 0 || blockType != kIODDCBlockTypeEDID || !data || !length)
+		return kIOReturnUnsupported;
+
+	// Serve the blocks cached at start() (1 = base EDID, 2 = CTA extension).
+	// blockNumber is 1-based per the IOFramebuffer contract.
+	if (blockNumber < 1 || blockNumber * 128 > edidLen)
+		return kIOReturnNotFound;
+
+	IOByteCount n = *length < 128 ? *length : 128;
+	memcpy(data, edidData + (blockNumber - 1) * 128, n);
+	*length = n;
+	return kIOReturnSuccess;
 }
