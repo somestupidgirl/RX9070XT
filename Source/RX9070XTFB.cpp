@@ -1009,7 +1009,20 @@ IOReturn RX9070XTFB::getAttribute(IOSelect attribute, uintptr_t *value) {
 	}
 }
 
+// Log an IOSelect as its four-character code so unknown selectors in the
+// power path can be identified from dmesg alone.
+#define FOURCC_ARGS(sel) \
+	(char)((sel) >> 24), (char)((sel) >> 16), (char)((sel) >> 8), (char)(sel)
+
+IOReturn RX9070XTFB::setPowerState(unsigned long powerStateOrdinal,
+                                   IOService *whatDevice) {
+	FBLOG("power: setPowerState %lu", powerStateOrdinal);
+	return super::setPowerState(powerStateOrdinal, whatDevice);
+}
+
 IOReturn RX9070XTFB::setAttribute(IOSelect attribute, uintptr_t value) {
+	FBLOG("attr: setAttribute '%c%c%c%c' = %lu",
+	      FOURCC_ARGS(attribute), (unsigned long)value);
 	switch (attribute) {
 		case kIOPowerAttribute:
 			// IOFramebuffer asks the subclass to carry out its power state
@@ -1056,6 +1069,8 @@ IOReturn RX9070XTFB::getAttributeForConnection(IOIndex connectIndex, IOSelect at
 
 IOReturn RX9070XTFB::setAttributeForConnection(IOIndex connectIndex, IOSelect attribute,
                                                uintptr_t value) {
+	FBLOG("attr: setAttributeForConnection[%d] '%c%c%c%c' = %lu",
+	      (int)connectIndex, FOURCC_ARGS(attribute), (unsigned long)value);
 	switch (attribute) {
 		case kConnectionPower:
 			// Display-off path used by IODisplay (Energy Saver display
