@@ -146,15 +146,14 @@ hardware; the `.rom` (NAVI48.bin AtomBIOS) in `../firmware` and the Linux
    `enableController()` stops being a no-op. The register-offset workflow
    (Linux `dcn_4_1_0_offset.h` + IP discovery segment bases) is established
    from the color investigation.
-4. **Display power management** *(implemented, awaiting hardware verify)* —
-   the driver registers sleep/doze/wake power states with PM
-   (`registerPowerDriver`, mirroring `IONDRVFramebuffer::initForPM` — the
-   subclass must do this itself; without it `setPowerState` is never called
-   and display sleep silently does nothing). On `kIOPowerAttribute`/
-   `kConnectionPower` changes it disables the DP video stream
-   (`DP_VID_STREAM_CNTL`) and puts the sink in D3 via a native-AUX DPCD
-   `SET_POWER` write, reversing both on wake. The timing generator and
-   clocks are untouched, so wake restores exactly the firmware state.
+4. ~~**Display power management**~~ — **done** (verified on hardware
+   2026-07-11). The driver registers sleep/doze/wake power states with PM
+   (`registerPowerDriver` from `enableController()`, mirroring
+   `IONDRVFramebuffer::initForPM` — the subclass must do this itself, and
+   must not do it from `start()`, which hangs boot). On power changes it
+   disables the DP video stream (`DP_VID_STREAM_CNTL`) and puts the sink in
+   D3 via a native-AUX DPCD `SET_POWER` write (monitor enters true standby),
+   reversing both on wake. The timing generator and clocks are untouched.
    **System sleep is deliberately vetoed** (`kIOPMPreventSystemSleep`, like
    Apple's `IOBootNDRV`): after GPU power loss we cannot reprogram the
    display pipe until native mode setting exists, so allowing it would mean
@@ -186,7 +185,8 @@ hardware; the `.rom` (NAVI48.bin AtomBIOS) in `../firmware` and the Linux
 - [x] Kill-switch boot-arg (`rx9070xt-off=1`) for safe iteration
 - [x] DP AUX software engine + EDID read over I2C-over-AUX (verified on
       hardware: Samsung 4K sink on AUX0), served via `getDDCBlock()`
-- [ ] Display sleep (implemented: stream blank + sink D3 over native AUX;
-      needs hardware verification)
+- [x] Display sleep verified on hardware: stream blank + sink D3 over native
+      AUX on sleep, D0 + stream re-enable on wake (system sleep vetoed until
+      mode setting exists)
 - [ ] Native mode setting (DCN 4.1.0) / multiple displays
 - [ ] Acceleration / Metal

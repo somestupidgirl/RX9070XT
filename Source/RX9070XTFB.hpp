@@ -199,12 +199,6 @@ public:
 	// Receives kIOPowerAttribute — IOFramebuffer's mechanism for asking the
 	// subclass to carry out a power state change (0 off, 1 doze, 2 on).
 	IOReturn    setAttribute(IOSelect attribute, uintptr_t value) override;
-	// PM entry point (IOService, handled by IOFramebuffer). Overridden only
-	// to log whether power changes reach this framebuffer at all — display
-	// sleep reportedly did nothing, and this distinguishes "never called"
-	// (PM-tree problem) from "called but mishandled".
-	IOReturn    setPowerState(unsigned long powerStateOrdinal,
-	                          IOService *whatDevice) override;
 	IOItemCount getConnectionCount() override;
 	IOReturn    getAttributeForConnection(IOIndex connectIndex, IOSelect attribute,
 	                                      uintptr_t *value) override;
