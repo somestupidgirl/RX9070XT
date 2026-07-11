@@ -6,6 +6,7 @@
 #include "RX9070XTFB.hpp"
 #include <IOKit/IOLib.h>
 #include <IOKit/IODeviceMemory.h>
+#include <IOKit/pwr_mgt/IOPM.h>
 
 #define FBLOG(fmt, ...)  IOLog("RX9070XTFB: " fmt "\n", ## __VA_ARGS__)
 
@@ -683,6 +684,36 @@ void RX9070XTFB::setDisplayPower(bool on) {
 	displayPowerOn = on;
 }
 
+void RX9070XTFB::initForPM() {
+	// States and flags mirror IONDRVFramebuffer::initForPM: 0 = sleep,
+	// 1 = doze (display blanked, framebuffer preserved), 2 = wake.
+	static IOPMPowerState powerStates[3] = {
+		{ 1, 0,                0,            0,            0, 0, 0, 0, 0, 0, 0, 0 },
+		{ 1, 0,                0,            kIOPMPowerOn, 0, 0, 0, 0, 0, 0, 0, 0 },
+		{ 1, kIOPMDeviceUsable, kIOPMPowerOn, kIOPMPowerOn, 0, 0, 0, 0, 0, 0, 0, 0 },
+	};
+
+	// Like Apple's IOBootNDRV (the EFI fallback framebuffer): we cannot
+	// reprogram the display pipe after the GPU loses power, so a wake from
+	// system sleep would come back to a black screen. Veto system sleep from
+	// every state until native mode setting exists. Display sleep (doze) is
+	// unaffected.
+	for (auto &state : powerStates)
+		state.capabilityFlags |= kIOPMPreventSystemSleep;
+
+	// Register with the policy maker (IOFramebuffer::start already did
+	// PMinit + joinPMtree). Without this no power states exist for this
+	// device and setPowerState is never called.
+	registerPowerDriver(this, powerStates, 3);
+	// No sleep until children (the displays) allow it.
+	temporaryPowerClampOn();
+	// Do not drop below doze until system sleep.
+	changePowerStateTo(1);
+	if (pciDevice)
+		pciDevice->setProperty("IOPMIsPowerManaged", true);  // key is SDK-private
+	FBLOG("power: registered power states (doze-only, system sleep vetoed)");
+}
+
 bool RX9070XTFB::regWriteDmu(uint8_t baseIdx, uint32_t dwordOffset, uint32_t value) {
 	uint32_t byteOffset;
 	if (!ipDiscovery.isValid() ||
@@ -835,6 +866,10 @@ bool RX9070XTFB::start(IOService *provider) {
 		FBLOG("start: super::start failed");
 		return false;
 	}
+
+	// After super::start (which does PMinit/joinPMtree) declare our power
+	// states so display sleep can actually reach setAttribute.
+	initForPM();
 
 	FBLOG("started");
 	return true;

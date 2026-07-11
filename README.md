@@ -147,11 +147,19 @@ hardware; the `.rom` (NAVI48.bin AtomBIOS) in `../firmware` and the Linux
    (Linux `dcn_4_1_0_offset.h` + IP discovery segment bases) is established
    from the color investigation.
 4. **Display power management** *(implemented, awaiting hardware verify)* —
-   on `kIOPowerAttribute`/`kConnectionPower` changes the driver disables the
-   DP video stream (`DP_VID_STREAM_CNTL`) and puts the sink in D3 via a
-   native-AUX DPCD `SET_POWER` write, reversing both on wake. The timing
-   generator and clocks are untouched, so wake restores exactly the firmware
-   state. Opt out with `rx9070xt-nosleep=1`.
+   the driver registers sleep/doze/wake power states with PM
+   (`registerPowerDriver`, mirroring `IONDRVFramebuffer::initForPM` — the
+   subclass must do this itself; without it `setPowerState` is never called
+   and display sleep silently does nothing). On `kIOPowerAttribute`/
+   `kConnectionPower` changes it disables the DP video stream
+   (`DP_VID_STREAM_CNTL`) and puts the sink in D3 via a native-AUX DPCD
+   `SET_POWER` write, reversing both on wake. The timing generator and
+   clocks are untouched, so wake restores exactly the firmware state.
+   **System sleep is deliberately vetoed** (`kIOPMPreventSystemSleep`, like
+   Apple's `IOBootNDRV`): after GPU power loss we cannot reprogram the
+   display pipe until native mode setting exists, so allowing it would mean
+   waking to a black screen. Opt out of display sleep handling with
+   `rx9070xt-nosleep=1`.
 5. **Power / clocks** — SMU firmware handshake so the card is stable, not
    stuck at boot clocks.
 6. **Acceleration (huge)** — a real accelerator: GFX12 command processor, ring
