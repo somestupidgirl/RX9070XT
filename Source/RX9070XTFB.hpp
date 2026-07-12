@@ -137,6 +137,13 @@ class RX9070XTFB : public IOFramebuffer {
 	// offset write and the block read as two transactions in one GO, per
 	// amdgpu's dce_i2c_hw.c.
 	bool readEDIDI2C(uint8_t line, uint8_t *edid, size_t count, uint8_t start);
+	// Boot-arg "rx9070xt-modedump=1": read-only survey of the mode-setting
+	// register landscape — every OTG's timing/enable state, every DIG
+	// front/back-end, the HUBP surface addresses and the DCCG clock muxes.
+	// The active DP pipe is the GOP-programmed reference template for
+	// bringing up the HDMI pipe; the dump shows what "lit" looks like
+	// versus dormant.
+	void dumpModeState();
 	// Probe each DisplayPort connector's AUX engine for an EDID, validate and
 	// publish it, and cache the first hit for the DDC API below. Issues only
 	// AUX transactions, never reprograms scanout. Runs by default (verified on

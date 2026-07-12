@@ -66,6 +66,7 @@ All parsed without a leading dash (`name=1`, not `-name=1`):
 | `rx9070xt-8bpc=1` | Experiment: switch the active DP stream 10 bpc → 8 bpc and update the MSA to match (first proven live register write). |
 | `rx9070xt-noedid=1` | Skip the EDID-over-AUX probe (default on; verified on hardware 2026-07-11). Use if a sink misbehaves on DDC. |
 | `rx9070xt-nosleep=1` | Disable display sleep handling (power changes become no-ops again, screen stays on). Escape hatch if blank/unblank misbehaves. |
+| `rx9070xt-modedump=1` | Read-only survey of the mode-setting registers: all OTG timings/enables, DIG front/back-ends, HUBP surface addresses, DCCG clock muxes. The lit DP pipe is the template for HDMI pipe bring-up. |
 
 ## Files
 
@@ -142,7 +143,7 @@ hardware; the `.rom` (NAVI48.bin AtomBIOS) in `../firmware` and the Linux
    `hasDDCConnect()`/`getDDCBlock()` so macOS sees the real display identity.
    HDMI/DVI sinks are read too, via the DC_I2C hardware engine (per amdgpu's
    `dce_i2c_hw.c`: offset write + block read queued as two transactions in a
-   single GO) — awaiting hardware verification.
+   single GO) — verified on hardware 2026-07-12 against a Lenovo 1080p sink.
 3. **Native mode setting (DCN 4.1.0)** — program HUBP/DPP/OPP/OTG to change
    resolution and light additional connectors; this is where
    `enableController()` stops being a no-op. The register-offset workflow
@@ -187,8 +188,10 @@ hardware; the `.rom` (NAVI48.bin AtomBIOS) in `../firmware` and the Linux
 - [x] Kill-switch boot-arg (`rx9070xt-off=1`) for safe iteration
 - [x] DP AUX software engine + EDID read over I2C-over-AUX (verified on
       hardware: Samsung 4K sink on AUX0), served via `getDDCBlock()`
-- [ ] HDMI/DVI EDID over the DC_I2C hardware engine (implemented; needs
-      hardware verification with the HDMI monitor attached)
+- [x] HDMI/DVI EDID over the DC_I2C hardware engine (verified on hardware:
+      Lenovo 1080p sink on ddc2; the engine must be woken — soft-reset
+      deasserted, RAM out of light sleep, DDC clock enabled — before
+      arbitration is requested)
 - [x] Display sleep verified on hardware: stream blank + sink D3 over native
       AUX on sleep, D0 + stream re-enable on wake (system sleep vetoed until
       mode setting exists)

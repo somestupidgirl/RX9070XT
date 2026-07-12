@@ -815,6 +815,54 @@ bool RX9070XTFB::readEDIDI2C(uint8_t line, uint8_t *edid, size_t count,
 	return true;
 }
 
+void RX9070XTFB::dumpModeState() {
+	uint32_t on = 0;
+	if (!PE_parse_boot_argn("rx9070xt-modedump", &on, sizeof(on)) || on == 0)
+		return;
+	if (!ipDiscovery.isValid() || !rmmio)
+		return;
+
+	// dcn_4_1_0_offset.h. OTG stride 0x80, DIG stride 0x124, HUBPREQ stride
+	// 0xdc, all base_idx 2; DCCG per-OTG pixel-rate regs are base_idx 1.
+	FBLOG("mode: --- mode-setting register survey (read-only) ---");
+	for (uint32_t i = 0; i < 4; i++) {
+		uint32_t o = i * 0x80;
+		FBLOG("mode: OTG%u ctl=0x%08x master_en=0x%08x h_total=0x%08x "
+		      "h_blank=0x%08x h_sync=0x%08x v_total=0x%08x v_blank=0x%08x "
+		      "v_sync=0x%08x", i,
+		      regReadDmu(2, 0x1b43 + o), regReadDmu(2, 0x1b5d + o),
+		      regReadDmu(2, 0x1b2a + o), regReadDmu(2, 0x1b2b + o),
+		      regReadDmu(2, 0x1b2c + o), regReadDmu(2, 0x1b2f + o),
+		      regReadDmu(2, 0x1b38 + o), regReadDmu(2, 0x1b39 + o));
+	}
+	for (uint32_t i = 0; i < 4; i++) {
+		uint32_t d = i * 0x124;
+		FBLOG("mode: DIG%u fe_cntl=0x%08x fe_clk=0x%08x fe_en=0x%08x "
+		      "hdmi_ctl=0x%08x be_clk=0x%08x be_en=0x%08x", i,
+		      regReadDmu(2, 0x2093 + d), regReadDmu(2, 0x2094 + d),
+		      regReadDmu(2, 0x2095 + d), regReadDmu(2, 0x209e + d),
+		      regReadDmu(2, 0x20bb + d), regReadDmu(2, 0x20bd + d));
+	}
+	for (uint32_t i = 0; i < 4; i++) {
+		uint32_t h = i * 0xdc;
+		FBLOG("mode: HUBP%u pitch=0x%08x addr=0x%08x addr_hi=0x%08x", i,
+		      regReadDmu(2, 0x0607 + h), regReadDmu(2, 0x060a + h),
+		      regReadDmu(2, 0x060b + h));
+	}
+	FBLOG("mode: DCCG otg_pixel_rate=[0x%08x 0x%08x 0x%08x 0x%08x]",
+	      regReadDmu(1, 0x0080), regReadDmu(1, 0x0084),
+	      regReadDmu(1, 0x0088), regReadDmu(1, 0x008c));
+	FBLOG("mode: DCCG dtbclk_p=0x%08x symclk32_se=0x%08x dpstreamclk=0x%08x "
+	      "phyasymclk=0x%08x gate_disable=0x%08x",
+	      regReadDmu(1, 0x0068), regReadDmu(1, 0x0065),
+	      regReadDmu(1, 0x004a), regReadDmu(1, 0x0052),
+	      regReadDmu(1, 0x0074));
+	FBLOG("mode: hdmicharclk=[0x%08x 0x%08x 0x%08x 0x%08x]",
+	      regReadDmu(2, 0x004a), regReadDmu(2, 0x004b),
+	      regReadDmu(2, 0x004c), regReadDmu(2, 0x004d));
+	FBLOG("mode: --- end survey ---");
+}
+
 void RX9070XTFB::setDisplayPower(bool on) {
 	if (!displaySleepEnabled || on == displayPowerOn)
 		return;
@@ -1046,6 +1094,7 @@ bool RX9070XTFB::start(IOService *provider) {
 		dumpDCN();
 		tryForce8bpc();
 		probeEDID();
+		dumpModeState();
 	}
 
 	if (!super::start(provider)) {
