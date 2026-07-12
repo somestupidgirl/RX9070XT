@@ -1107,8 +1107,14 @@ constexpr uint32_t kCurModeShift  = 8;
 constexpr uint32_t kCurPitchShift = 16;
 constexpr uint32_t kCurLpcShift   = 24;
 constexpr uint32_t kCurXShift     = 15;
-// CM_CUR0_CURSOR0_CONTROL: CUR0_ENABLE bit0, CUR0_MODE [6:4].
-constexpr uint32_t kCur0ModeShift = 4;
+// CM_CUR0_CURSOR0_CONTROL: CUR0_ENABLE bit0, CUR0_MODE [6:4], plus two bits
+// captured from a WORKING amdgpu cursor on this exact GPU (register diff,
+// Debian, 2026-07-12: working value 0x000000a5 vs our 0x21): bit 7
+// (CUR0_PIXEL_ALPHA_MOD_EN) and bit 2 (CUR0_PIX_INV_MODE per the sh_mask).
+// Neither is set by dpp401_set_cursor_attributes — amdgpu programs them in
+// a layer we had not ported. Mirror the proven-working value.
+constexpr uint32_t kCur0ModeShift   = 4;
+constexpr uint32_t kCur0WorkingBits = (1u << 7) | (1u << 2);
 
 // hubp1_get_lines_per_chunk for color cursors: enum {1,2,4,8,16} lines
 // encodes as 0..4.
@@ -1283,18 +1289,23 @@ IOReturn RDNA4FB::setCursorImage(void *cursorImage) {
 	regWriteDmu(2, kCmCur0FpScaleBiasRB, kCurFpScaleOne);
 	regWriteDmu(2, kCmCur0MatrixMode, 0);   // matrix bypass
 	regWriteDmu(2, kCmCur0Control,
-	            (hwCursorMode << kCur0ModeShift) | (hwCursorVisible ? 1u : 0u));
+	            (hwCursorMode << kCur0ModeShift) | kCur0WorkingBits |
+	            (hwCursorVisible ? 1u : 0u));
 
 	if (cursorImgLogs < 3) {
 		cursorImgLogs++;
 		FBLOG("cursor: image %ux%u px0=0x%08x rb: ctl=0x%08x size=0x%08x "
-		      "addr=0x%08x/%04x set=0x%08x cm=0x%08x fp=0x%08x/0x%08x",
+		      "addr=0x%08x/%04x set=0x%08x cm=0x%08x fp=0x%08x/0x%08x "
+		      "hubp_cntl=0x%08x cnvc=0x%08x/0x%08x",
 		      w, h, cursorStage[0],
 		      regReadDmu(2, kCurControl), regReadDmu(2, kCurSize),
 		      regReadDmu(2, kCurAddr), regReadDmu(2, kCurAddrHigh) & 0xffff,
 		      regReadDmu(2, kCurSettings), regReadDmu(2, kCmCur0Control),
 		      regReadDmu(2, kCmCur0FpScaleBiasGY),
-		      regReadDmu(2, kCmCur0FpScaleBiasRB));
+		      regReadDmu(2, kCmCur0FpScaleBiasRB),
+		      regReadDmu(2, 0x05f4),           // HUBP0_DCHUBP_CNTL
+		      regReadDmu(2, 0x0ccf),           // CNVC surface pixel format
+		      regReadDmu(2, 0x0cd0));          // CNVC format control
 	}
 	return kIOReturnSuccess;
 }
@@ -1322,7 +1333,8 @@ IOReturn RDNA4FB::setCursorState(SInt32 x, SInt32 y, bool visible) {
 		if (cursorCtlBase)   // 0 until the first setCursorImage
 			regWriteDmu(2, kCurControl, cursorCtlBase | (visible ? 1u : 0u));
 		regWriteDmu(2, kCmCur0Control,
-		            (hwCursorMode << kCur0ModeShift) | (visible ? 1u : 0u));
+		            (hwCursorMode << kCur0ModeShift) | kCur0WorkingBits |
+		            (visible ? 1u : 0u));
 	}
 	hwCursorVisible = visible;
 
