@@ -17,6 +17,7 @@
 #include "../src/ipdiscovery.hpp"
 #include "../src/edid.hpp"
 #include "../src/otgtiming.hpp"
+#include "../src/dmub.hpp"
 
 #include <cstdio>
 #include <cstdlib>
@@ -35,6 +36,15 @@ static const char kSamsungEdidHex[] =
 	"000060085b3690000000000000e6060501605b00e5018b84903d565e00a0a0a0"
 	"295030203500ba882100001a6fc200a0a0a0555030203500ba882100001a0474"
 	"801871382d40582c4500ba882100001e00000000000000000000000000000005";
+
+// The Lenovo G25-10 EDID base block captured from EDID,DDC2 in ioreg
+// (read over the DC_I2C engine, 2026-07-12) — the HDMI sink the second-pipe
+// mode-set must drive.
+static const char kLenovoEdidHex[] =
+	"00ffffffffffff0030aefe6500000000321e010380361e782a9055a75553a028"
+	"135054a10800d1c0b30081c081809500a9c001010101023a801871382d40582c"
+	"4500202f2100001e000000fd0030901eaa22000a202020202020000000fc004c"
+	"454e204732352d31300a2020000000ff005534423433304e390a202020200171";
 
 static bool hexToBytes(const char *hex, uint8_t *out, size_t outLen) {
 	for (size_t i = 0; i < outLen; i++) {
@@ -156,6 +166,61 @@ static int testEdidParser() {
 	// This is a DisplayPort sink: no HDMI LLC vendor block expected.
 	if (cta.hasHdmiVsdb) {
 		fprintf(stderr, "FAIL: unexpected HDMI VSDB on a DP sink\n");
+		failures++;
+	}
+
+	// --- Lenovo G25-10 (the HDMI sink the second pipe must light) ---
+	uint8_t lenovo[128];
+	Edid::DetailedTiming lt {};
+	if (!hexToBytes(kLenovoEdidHex, lenovo, sizeof(lenovo)) ||
+	    !Edid::preferredTiming(lenovo, sizeof(lenovo), lt)) {
+		fprintf(stderr, "FAIL: Lenovo fixture did not parse\n");
+		return failures + 1;
+	}
+	OtgTiming::Regs lr {};
+	if (!OtgTiming::compute(lt, lr)) {
+		fprintf(stderr, "FAIL: OTG computation rejected the 1080p60 timing\n");
+		return failures + 1;
+	}
+	printf("\nedid fixture (Lenovo G25-10, HDMI):\n");
+	printf("  preferred: %ux%u@%u.%03uHz pclk=%ukHz\n", lt.hActive, lt.vActive,
+	       lt.refreshMilliHz() / 1000, lt.refreshMilliHz() % 1000, lt.pixelClockKHz);
+	printf("  OTG1 program values: h_total=0x%08x h_blank=0x%08x h_sync=0x%08x\n"
+	       "                       v_total=0x%08x v_blank=0x%08x v_sync=0x%08x\n",
+	       lr.hTotal, lr.hBlankStartEnd, lr.hSyncA,
+	       lr.vTotal, lr.vBlankStartEnd, lr.vSyncA);
+	struct { const char *name; uint32_t got, want; } lchecks[] = {
+		{ "pclk",      lt.pixelClockKHz,   148500 },
+		{ "hActive",   lt.hActive,         1920 },
+		{ "vActive",   lt.vActive,         1080 },
+		{ "OTG_H_TOTAL",           lr.hTotal,         2199 },
+		{ "OTG_H_SYNC_A",          lr.hSyncA,         44u << 16 },
+		{ "OTG_H_BLANK_START_END", lr.hBlankStartEnd, 2112u | (192u << 16) },
+		{ "OTG_V_TOTAL",           lr.vTotal,         1124 },
+		{ "OTG_V_SYNC_A",          lr.vSyncA,         5u << 16 },
+		{ "OTG_V_BLANK_START_END", lr.vBlankStartEnd, 1121u | (41u << 16) },
+	};
+	for (auto &c : lchecks) {
+		if (c.got != c.want) {
+			fprintf(stderr, "FAIL: Lenovo %s = 0x%x, expected 0x%x\n",
+			        c.name, c.got, c.want);
+			failures++;
+		}
+	}
+	if (lr.hSyncPolInvert || lr.vSyncPolInvert) {
+		fprintf(stderr, "FAIL: Lenovo sync polarity should be +/+\n");
+		failures++;
+	}
+
+	// --- DMUB command header encoding ---
+	// type QUERY_FEATURE_CAPS(6), subtype 0, payload 60 -> 0x3c000006
+	if (Dmub::headerWord(Dmub::CmdQueryFeatureCaps, 0, 60) != 0x3c000006u) {
+		fprintf(stderr, "FAIL: DMUB header encode (query caps)\n");
+		failures++;
+	}
+	// type VBIOS(128), subtype SET_PIXEL_CLOCK(2), payload 28 -> 0x1c000280
+	if (Dmub::headerWord(Dmub::CmdVbios, Dmub::VbiosSetPixelClock, 28) != 0x1c000280u) {
+		fprintf(stderr, "FAIL: DMUB header encode (vbios)\n");
 		failures++;
 	}
 	return failures;

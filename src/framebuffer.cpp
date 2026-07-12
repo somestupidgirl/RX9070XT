@@ -5,6 +5,7 @@
 
 #include "framebuffer.hpp"
 #include "edid.hpp"
+#include "dmub.hpp"
 #include <IOKit/IOLib.h>
 #include <IOKit/IODeviceMemory.h>
 #include <IOKit/pwr_mgt/IOPM.h>
@@ -913,6 +914,113 @@ void RDNA4FB::dumpModeState() {
 	FBLOG("mode: --- end survey ---");
 }
 
+// ---------------------------------------------------------------------------
+// DMUB mailbox (display firmware)
+// ---------------------------------------------------------------------------
+
+void RDNA4FB::dmubPing() {
+	uint32_t on = 0;
+	if (!PE_parse_boot_argn("rdna4-dmubping", &on, sizeof(on)) || on == 0)
+		return;
+	if (!ipDiscovery.isValid() || !rmmio || fbPhysBase == 0) {
+		FBLOG("dmub: MMIO unavailable, skipping ping");
+		return;
+	}
+
+	// DMCUB registers (dcn_4_1_0_offset.h, base_idx 2).
+	constexpr uint32_t kInbox1Base = 0x01d4, kInbox1Size = 0x01d5;
+	constexpr uint32_t kInbox1Wptr = 0x01d6, kInbox1Rptr = 0x01d7;
+	constexpr uint32_t kCw0Base = 0x01a5, kCw0Top = 0x01ad;
+	constexpr uint32_t kCw0Off  = 0x01b5;  // pairs: OFFSET, OFFSET_HIGH
+
+	// Anchor for MC->CPU translation (normally set by initHWCursor, but the
+	// ping must work without the cursor armed).
+	if (scanoutMcAddr == 0) {
+		uint32_t lo = regReadDmu(2, 0x060a);
+		uint32_t hi = regReadDmu(2, 0x060b);
+		if (lo == 0xFFFFFFFF || (lo == 0 && hi == 0)) {
+			FBLOG("dmub: scanout MC unreadable, skipping ping");
+			return;
+		}
+		scanoutMcAddr = (static_cast<uint64_t>(hi & 0xffff) << 32) | lo;
+	}
+
+	uint32_t inboxBase = regReadDmu(2, kInbox1Base);
+	uint32_t inboxSize = regReadDmu(2, kInbox1Size);
+	uint32_t wptr = regReadDmu(2, kInbox1Wptr);
+	uint32_t rptr = regReadDmu(2, kInbox1Rptr);
+	if (inboxSize == 0 || inboxSize > 0x100000 || wptr != rptr) {
+		FBLOG("dmub: inbox not idle/sane (size=0x%x wptr=0x%x rptr=0x%x)",
+		      inboxSize, wptr, rptr);
+		return;
+	}
+
+	// The inbox base is a DMUB-address-space pointer; region windows CW0-7
+	// map DMUB space onto VRAM (MC). Find the covering window.
+	uint64_t ringMc = 0;
+	for (uint32_t i = 0; i < 8; i++) {
+		uint32_t cwBase = regReadDmu(2, kCw0Base + i);
+		uint32_t cwTop  = regReadDmu(2, kCw0Top + i);
+		uint64_t cwOff  = regReadDmu(2, kCw0Off + 2 * i) |
+		    (static_cast<uint64_t>(regReadDmu(2, kCw0Off + 2 * i + 1)) << 32);
+		if (cwBase || cwTop)
+			FBLOG("dmub: cw%u dmub-space 0x%08x..0x%08x -> mc 0x%llx",
+			      i, cwBase, cwTop, cwOff);
+		if (cwBase && inboxBase >= cwBase && inboxBase <= cwTop && ringMc == 0)
+			ringMc = cwOff + (inboxBase - cwBase);
+	}
+	if (ringMc == 0) {
+		FBLOG("dmub: no region window covers inbox 0x%08x", inboxBase);
+		return;
+	}
+
+	// CPU access via the same MC->BAR delta as the framebuffer.
+	if (ringMc < scanoutMcAddr ||
+	    (ringMc - scanoutMcAddr) + inboxSize > 192ULL * 1024 * 1024) {
+		FBLOG("dmub: ring mc 0x%llx outside CPU-visible window", ringMc);
+		return;
+	}
+	IODeviceMemory *mem = IODeviceMemory::withRange(
+	    fbPhysBase + (ringMc - scanoutMcAddr), inboxSize);
+	if (!mem)
+		return;
+	IOMemoryMap *map = mem->map();
+	mem->release();
+	if (!map) {
+		FBLOG("dmub: failed to map inbox ring");
+		return;
+	}
+	volatile uint32_t *ring =
+	    reinterpret_cast<volatile uint32_t *>(map->getVirtualAddress());
+
+	// Compose one QUERY_FEATURE_CAPS (reply written into the entry by FW)
+	// at the write pointer and submit by advancing WPTR.
+	uint32_t entry = wptr / 4;   // dword index of our 64-byte slot
+	ring[entry] = Dmub::headerWord(Dmub::CmdQueryFeatureCaps, 0,
+	                               Dmub::kCmdSize - 4);
+	for (uint32_t i = 1; i < Dmub::kCmdSize / 4; i++)
+		ring[entry + i] = 0;
+
+	uint32_t newWptr = (wptr + Dmub::kCmdSize) % inboxSize;
+	regWriteDmu(2, kInbox1Wptr, newWptr);
+
+	// FW normally consumes within microseconds; allow 200 ms.
+	uint32_t nrptr = rptr;
+	for (int i = 0; i < 20000; i++) {
+		nrptr = regReadDmu(2, kInbox1Rptr);
+		if (nrptr == newWptr)
+			break;
+		IODelay(10);
+	}
+	if (nrptr == newWptr)
+		FBLOG("dmub: PING OK — rptr advanced 0x%x -> 0x%x; caps: %08x %08x %08x",
+		      rptr, nrptr, ring[entry + 1], ring[entry + 2], ring[entry + 3]);
+	else
+		FBLOG("dmub: ping NOT consumed (wptr=0x%x rptr stuck at 0x%x)",
+		      newWptr, nrptr);
+	map->release();
+}
+
 void RDNA4FB::setDisplayPower(bool on) {
 	if (!displaySleepEnabled || on == displayPowerOn)
 		return;
@@ -1568,6 +1676,7 @@ bool RDNA4FB::start(IOService *provider) {
 		probeEDID();
 		dumpModeState();
 		initHWCursor();
+		dmubPing();
 	}
 
 	if (!super::start(provider)) {

@@ -84,6 +84,8 @@ All parsed without a leading dash (`name=1`, not `-name=1`):
 | `rdna4-modedump=1` | Read-only survey of the mode-setting registers: all OTG timings/enables, DIG front/back-ends, HUBP surface addresses, DCCG clock muxes, DMUB status. The lit DP pipe is the template for HDMI pipe bring-up. |
 | `rdna4-hwcursor=1` | Enable the DCN hardware cursor plane (sprite in VRAM after the framebuffer, overlaid at scanout). Fixes software-cursor lag under heavy repaint. Opt-in until hardware-verified. |
 | `rdna4-curmode=N` | Cursor pixel mode when hwcursor is on: 2 = premultiplied ARGB (default), 3 = straight alpha. Flip to 3 if the pointer shows dark/bright fringes. |
+| `rdna4-curtest=1` | Cursor bisect: fetch the sprite from the scanout base (proven-fetchable memory). A floating square of screen content proves the cursor engine and isolates the bug to sprite addressing. |
+| `rdna4-dmubping=1` | First contact with the DMUB display firmware: resolve the inbox1 ring through the DMCUB region windows, submit one QUERY_FEATURE_CAPS command, verify RPTR advances. Proves the mailbox route for mode setting. |
 | `rdna4-vbl=1` | Provide an emulated vertical-blank interrupt (workloop timer at the EDID refresh rate). Engages IOFramebuffer's frame pacing (CVDisplayLink timestamps, deferred cursor sync) that is otherwise absent without a hardware IRQ handler. |
 
 ## Files

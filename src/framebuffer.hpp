@@ -138,6 +138,13 @@ class RDNA4FB : public IOFramebuffer {
 	// offset write and the block read as two transactions in one GO, per
 	// amdgpu's dce_i2c_hw.c.
 	bool readEDIDI2C(uint8_t line, uint8_t *edid, size_t count, uint8_t start);
+	// Boot-arg "rdna4-dmubping=1": first contact with the DMUB display
+	// firmware. Resolves the inbox1 ring's VRAM location through the DMCUB
+	// region windows, submits one harmless QUERY_FEATURE_CAPS command and
+	// watches RPTR advance. Success proves the mailbox route amdgpu uses
+	// for transmitter control / pixel clock — the keystone of second-pipe
+	// mode setting — is drivable from this kext.
+	void dmubPing();
 	// Boot-arg "rdna4-modedump=1": read-only survey of the mode-setting
 	// register landscape — every OTG's timing/enable state, every DIG
 	// front/back-end, the HUBP surface addresses and the DCCG clock muxes.
