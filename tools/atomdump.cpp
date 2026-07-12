@@ -15,11 +15,80 @@
 
 #include "../Source/AtomBios.hpp"
 #include "../Source/IpDiscovery.hpp"
+#include "../Source/Edid.hpp"
 
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <vector>
+
+// The Samsung LS27DG702 (Odyssey G70D) EDID base block captured from the
+// live system's IODisplayEDID (2026-07-11) — fixture for the DTD parser the
+// kext uses to turn an EDID into OTG timing parameters.
+static const char kSamsungEdidHex[] =
+	"00ffffffffffff004c2d6fe0000000000e220104b53c22783b32b5ad5045a125"
+	"0e505421880081c0810081809500a9c0b300010101014dd000a0f0703e803020"
+	"3500ba882100001a000000fd0c309045458f010a202020202020000000fc004f"
+	"64797373657920473730440a000000ff004831414b3530303030300a2020027a";
+
+static bool hexToBytes(const char *hex, uint8_t *out, size_t outLen) {
+	for (size_t i = 0; i < outLen; i++) {
+		unsigned v;
+		if (sscanf(hex + 2 * i, "%2x", &v) != 1)
+			return false;
+		out[i] = static_cast<uint8_t>(v);
+	}
+	return true;
+}
+
+// Verify the EDID DTD parser against the known 4K60 preferred timing.
+static int testEdidParser() {
+	int failures = 0;
+	uint8_t edid[128];
+	if (!hexToBytes(kSamsungEdidHex, edid, sizeof(edid))) {
+		fprintf(stderr, "FAIL: EDID fixture is malformed\n");
+		return 1;
+	}
+
+	Edid::DetailedTiming t {};
+	if (!Edid::preferredTiming(edid, sizeof(edid), t)) {
+		fprintf(stderr, "FAIL: preferred timing did not parse\n");
+		return 1;
+	}
+
+	printf("\nedid fixture (Samsung Odyssey G70D):\n");
+	printf("  preferred: %ux%u@%u.%03uHz pclk=%ukHz\n", t.hActive, t.vActive,
+	       t.refreshMilliHz() / 1000, t.refreshMilliHz() % 1000, t.pixelClockKHz);
+	printf("  h: blank=%u fp=%u sw=%u pol=%c   v: blank=%u fp=%u sw=%u pol=%c\n",
+	       t.hBlank, t.hSyncOffset, t.hSyncWidth, t.hSyncPositive ? '+' : '-',
+	       t.vBlank, t.vSyncOffset, t.vSyncWidth, t.vSyncPositive ? '+' : '-');
+
+	struct { const char *name; uint32_t got, want; } checks[] = {
+		{ "hActive",  t.hActive,        3840 },
+		{ "vActive",  t.vActive,        2160 },
+		{ "pclk",     t.pixelClockKHz,  533250 },
+		{ "hBlank",   t.hBlank,         160 },
+		{ "vBlank",   t.vBlank,         62 },
+		{ "hSyncOff", t.hSyncOffset,    48 },
+		{ "hSyncW",   t.hSyncWidth,     32 },
+		{ "vSyncOff", t.vSyncOffset,    3 },
+		{ "vSyncW",   t.vSyncWidth,     5 },
+		{ "hTotal",   t.hTotal(),       4000 },
+		{ "vTotal",   t.vTotal(),       2222 },
+	};
+	for (auto &c : checks) {
+		if (c.got != c.want) {
+			fprintf(stderr, "FAIL: EDID %s = %u, expected %u\n", c.name, c.got, c.want);
+			failures++;
+		}
+	}
+	// 533250000 / (4000*2222) = 59.99 Hz
+	if (t.refreshMilliHz() / 100 != 599) {
+		fprintf(stderr, "FAIL: refresh %u mHz, expected ~59.99 Hz\n", t.refreshMilliHz());
+		failures++;
+	}
+	return failures;
+}
 
 static const char *tableNames[AtomBios::MaxDataTable] = {
 	"utilitypipeline", "multimedia_info", "smc_dpm_info", "sw_datatable3",
@@ -180,6 +249,42 @@ int main(int argc, char **argv) {
 		fprintf(stderr, "FAIL: no IP discovery binary found\n");
 		failures++;
 	}
+
+	// Command-function inventory. Finding (2026-07-12, this ROM): the display
+	// bytecode routines (setpixelclock, transmitter control, encoder control)
+	// are ABSENT — on DCN 3.1+ they were replaced by DMUB firmware mailbox
+	// commands (DMUB_CMD__VBIOS_*), so mode setting cannot go through an
+	// AtomBIOS interpreter on this card. Only asic_init survives.
+	static const struct { uint8_t idx; const char *name; bool required; } cmds[] = {
+		{ AtomBios::CmdAsicInit,               "asic_init",               true  },
+		{ AtomBios::CmdDigEncoderControl,      "digxencodercontrol",      false },
+		{ AtomBios::CmdSetPixelClock,          "setpixelclock",           false },
+		{ AtomBios::CmdEnableDispPowerGating,  "enabledisppowergating",   false },
+		{ AtomBios::CmdBlankCrtc,              "blankcrtc",               false },
+		{ AtomBios::CmdEnableCrtc,             "enablecrtc",              false },
+		{ AtomBios::CmdSelectCrtcSource,       "selectcrtc_source",       false },
+		{ AtomBios::CmdSetDceClock,            "setdceclock",             false },
+		{ AtomBios::CmdSetCrtcUsingDtdTiming,  "setcrtc_usingdtdtiming",  false },
+		{ AtomBios::CmdDig1TransmitterControl, "dig1transmittercontrol",  false },
+		{ AtomBios::CmdProcessAuxChannel,      "processauxchanneltransaction", false },
+	};
+	printf("\ncommand functions (bytecode):\n");
+	for (auto &c : cmds) {
+		AtomBios::CmdTableInfo info;
+		if (bios.getCommandTable(c.idx, info)) {
+			printf("  [%2u] %-28s @0x%05zx size=%-5u rev %u.%u\n", c.idx, c.name,
+			       info.offset - bios.imageOffset(), info.size,
+			       info.formatRev, info.contentRev);
+		} else {
+			printf("  [%2u] %-28s absent\n", c.idx, c.name);
+			if (c.required) {
+				fprintf(stderr, "FAIL: required command function %s missing\n", c.name);
+				failures++;
+			}
+		}
+	}
+
+	failures += testEdidParser();
 
 	if (failures) {
 		fprintf(stderr, "\n%d check(s) failed\n", failures);

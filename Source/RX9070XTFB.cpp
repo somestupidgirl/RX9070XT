@@ -4,6 +4,7 @@
 //
 
 #include "RX9070XTFB.hpp"
+#include "Edid.hpp"
 #include <IOKit/IOLib.h>
 #include <IOKit/IODeviceMemory.h>
 #include <IOKit/pwr_mgt/IOPM.h>
@@ -218,6 +219,26 @@ bool RX9070XTFB::loadVBIOS() {
 		}
 	} else {
 		FBLOG("discovery: not present in image (inject the full 2MiB flash dump to enable)");
+	}
+
+	// Command-function inventory for the mode-setting plan: amdgpu drives the
+	// PHY/PLL through these bytecode routines rather than raw registers.
+	static const struct { uint8_t idx; const char *name; } cmds[] = {
+		{ AtomBios::CmdSetPixelClock,          "setpixelclock" },
+		{ AtomBios::CmdDig1TransmitterControl, "dig1transmittercontrol" },
+		{ AtomBios::CmdDigEncoderControl,      "digxencodercontrol" },
+		{ AtomBios::CmdEnableCrtc,             "enablecrtc" },
+		{ AtomBios::CmdSetCrtcUsingDtdTiming,  "setcrtc_usingdtdtiming" },
+		{ AtomBios::CmdEnableDispPowerGating,  "enabledisppowergating" },
+	};
+	for (auto &c : cmds) {
+		AtomBios::CmdTableInfo info;
+		if (atomBios.getCommandTable(c.idx, info))
+			FBLOG("cmd: %s v%u.%u %u bytes at +0x%zx", c.name,
+			      info.formatRev, info.contentRev, info.size,
+			      info.offset - atomBios.imageOffset());
+		else
+			FBLOG("cmd: %s absent", c.name);
 	}
 	return true;
 }
@@ -609,13 +630,22 @@ void RX9070XTFB::probeEDID() {
 			static_cast<char>('@' + ((m >> 5) & 0x1f)),
 			static_cast<char>('@' + (m & 0x1f)), 0 };
 		uint16_t product = static_cast<uint16_t>(edid[10] | (edid[11] << 8));
-		// Preferred timing = first 18-byte detailed descriptor (byte 54).
-		const uint8_t *d = edid + 54;
-		uint32_t hres = d[2] | ((static_cast<uint32_t>(d[4] & 0xf0)) << 4);
-		uint32_t vres = d[5] | ((static_cast<uint32_t>(d[7] & 0xf0)) << 4);
-		FBLOG("edid: connector %zu (%s%u): %s product 0x%04x EDID %u.%u "
-		      "preferred %ux%u", i, bus, inst, mfg, product, edid[18], edid[19],
-		      hres, vres);
+		FBLOG("edid: connector %zu (%s%u): %s product 0x%04x EDID %u.%u",
+		      i, bus, inst, mfg, product, edid[18], edid[19]);
+
+		// Preferred timing, fully decoded: these are the raster numbers an
+		// OTG would be programmed with to drive this sink.
+		Edid::DetailedTiming t {};
+		if (Edid::parseDetailedTiming(edid + 54, t)) {
+			FBLOG("edid: connector %zu (%s%u): preferred %ux%u@%u.%03uHz "
+			      "pclk=%ukHz h(blank=%u fp=%u sw=%u %c) v(blank=%u fp=%u sw=%u %c)%s",
+			      i, bus, inst, t.hActive, t.vActive,
+			      t.refreshMilliHz() / 1000, t.refreshMilliHz() % 1000,
+			      t.pixelClockKHz,
+			      t.hBlank, t.hSyncOffset, t.hSyncWidth, t.hSyncPositive ? '+' : '-',
+			      t.vBlank, t.vSyncOffset, t.vSyncWidth, t.vSyncPositive ? '+' : '-',
+			      t.interlaced ? " interlaced" : "");
+		}
 
 		char key[40];
 		snprintf(key, sizeof(key), "EDID,%s%u", bus, inst);
@@ -838,11 +868,19 @@ void RX9070XTFB::dumpModeState() {
 	for (uint32_t i = 0; i < 4; i++) {
 		uint32_t d = i * 0x124;
 		FBLOG("mode: DIG%u fe_cntl=0x%08x fe_clk=0x%08x fe_en=0x%08x "
-		      "hdmi_ctl=0x%08x be_clk=0x%08x be_en=0x%08x", i,
+		      "hdmi_ctl=0x%08x be_cntl=0x%08x be_clk=0x%08x be_en=0x%08x "
+		      "tmds=0x%08x", i,
 		      regReadDmu(2, 0x2093 + d), regReadDmu(2, 0x2094 + d),
 		      regReadDmu(2, 0x2095 + d), regReadDmu(2, 0x209e + d),
-		      regReadDmu(2, 0x20bb + d), regReadDmu(2, 0x20bd + d));
+		      regReadDmu(2, 0x20bc + d), regReadDmu(2, 0x20bb + d),
+		      regReadDmu(2, 0x20bd + d), regReadDmu(2, 0x20e4 + d));
 	}
+	FBLOG("mode: DCCG dp_dto phase/modulo = [0x%08x/0x%08x 0x%08x/0x%08x "
+	      "0x%08x/0x%08x 0x%08x/0x%08x]",
+	      regReadDmu(1, 0x0081), regReadDmu(1, 0x0082),
+	      regReadDmu(1, 0x0085), regReadDmu(1, 0x0086),
+	      regReadDmu(1, 0x0089), regReadDmu(1, 0x008a),
+	      regReadDmu(1, 0x008d), regReadDmu(1, 0x008e));
 	for (uint32_t i = 0; i < 4; i++) {
 		uint32_t h = i * 0xdc;
 		FBLOG("mode: HUBP%u pitch=0x%08x addr=0x%08x addr_hi=0x%08x", i,
@@ -860,6 +898,18 @@ void RX9070XTFB::dumpModeState() {
 	FBLOG("mode: hdmicharclk=[0x%08x 0x%08x 0x%08x 0x%08x]",
 	      regReadDmu(2, 0x004a), regReadDmu(2, 0x004b),
 	      regReadDmu(2, 0x004c), regReadDmu(2, 0x004d));
+	// DMUB display microcontroller: the VBIOS ships no display command
+	// tables (verified via make test), so PHY/PLL work on DCN4 goes through
+	// DMUB mailbox commands — IF a firmware is loaded and running. Nonzero
+	// CNTL enable / inbox base+pointers / scratch means the GOP left DMUB
+	// alive and route (a) is viable; all-zero means route (b) (register-level
+	// PHY bring-up from lit-pipe diffs).
+	FBLOG("mode: DMCUB cntl=0x%08x cntl2=0x%08x inbox1 base=0x%08x size=0x%08x "
+	      "wptr=0x%08x rptr=0x%08x scratch0=0x%08x",
+	      regReadDmu(2, 0x01f6), regReadDmu(2, 0x0200),
+	      regReadDmu(2, 0x01d4), regReadDmu(2, 0x01d5),
+	      regReadDmu(2, 0x01d6), regReadDmu(2, 0x01d7),
+	      regReadDmu(2, 0x01e3));
 	FBLOG("mode: --- end survey ---");
 }
 

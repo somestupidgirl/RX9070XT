@@ -17,7 +17,8 @@ static constexpr size_t kAtomSignatureOffset  = 0x04;   // "ATOM"
 static constexpr size_t kConfigFilenameOffset = 0x0c;   // u16 image-relative ptr
 static constexpr size_t kSubsysVidOffset      = 0x18;
 static constexpr size_t kSubsysIdOffset       = 0x1a;
-static constexpr size_t kMasterDataTableOffset= 0x20;   // u16 image-relative ptr
+static constexpr size_t kMasterHwFunctionOffset = 0x1e; // u16 image-relative ptr
+static constexpr size_t kMasterDataTableOffset  = 0x20; // u16 image-relative ptr
 
 bool AtomBios::readU8(size_t off, uint8_t &v) const {
 	if (off >= size) return false;
@@ -98,6 +99,43 @@ bool AtomBios::validateImage(size_t offset) {
 	base = offset;
 	length = imgLen;
 	masterDataTable = offset + mdt;
+
+	// Master command function table (optional for us; used to plan the
+	// SetPixelClock / transmitter-control work).
+	uint16_t mct;
+	masterCmdTable = 0;
+	if (readU16(atomHdr + kMasterHwFunctionOffset, mct) && mct != 0) {
+		TableHeader mctHdr;
+		if (readTableHeader(offset + mct, mctHdr))
+			masterCmdTable = offset + mct;
+	}
+	return true;
+}
+
+bool AtomBios::getCommandTable(uint8_t index, CmdTableInfo &out) const {
+	if (!valid || !masterCmdTable || index >= CmdFunctionCount)
+		return false;
+
+	TableHeader mctHdr;
+	if (!readTableHeader(masterCmdTable, mctHdr))
+		return false;
+	size_t entries = (mctHdr.size - 4) / 2;
+	if (index >= entries)
+		return false;
+
+	uint16_t rel;
+	if (!readU16(masterCmdTable + 4 + 2u * index, rel) || rel == 0)
+		return false;
+
+	size_t abs = base + rel;
+	TableHeader th;
+	if (!readTableHeader(abs, th))
+		return false;
+
+	out.offset = abs;
+	out.size = th.size;
+	out.formatRev = th.formatRev;
+	out.contentRev = th.contentRev;
 	return true;
 }
 

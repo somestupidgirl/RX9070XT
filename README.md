@@ -148,7 +148,14 @@ hardware; the `.rom` (NAVI48.bin AtomBIOS) in `../firmware` and the Linux
    resolution and light additional connectors; this is where
    `enableController()` stops being a no-op. The register-offset workflow
    (Linux `dcn_4_1_0_offset.h` + IP discovery segment bases) is established
-   from the color investigation.
+   from the color investigation. **Key constraint (verified against this
+   ROM):** the VBIOS carries *no* display command tables — only `asic_init`
+   survives; `setpixelclock`/`dig1transmittercontrol` are absent because
+   DCN 3.1+ moved that work to DMUB firmware mailbox commands. So the
+   PHY/PLL step needs either the DMUB mailbox (if the GOP left DMUB
+   running) or register-level reverse engineering from lit-vs-dormant pipe
+   diffs (`rx9070xt-modedump=1`). OTG timing and DIG encoder registers are
+   directly programmable either way.
 4. ~~**Display power management**~~ — **done** (verified on hardware
    2026-07-11). The driver registers sleep/doze/wake power states with PM
    (`registerPowerDriver` from `enableController()`, mirroring

@@ -149,6 +149,37 @@ public:
 	size_t getGpioPins(GpioPin *pins, size_t maxPins) const;
 	bool   findGpioPin(uint8_t gpioId, GpioPin &out) const;
 
+	// --- Command functions (AtomBIOS bytecode) -----------------------------
+	// The master command function table lists the bytecode routines the VBIOS
+	// exposes; amdgpu executes these for PHY/PLL work (SetPixelClock,
+	// transmitter control) instead of programming those blocks directly.
+	// Indices from atomfirmware.h atom_master_list_of_command_functions_v2_1.
+	enum CmdFunction : uint8_t {
+		CmdAsicInit               = 0,
+		CmdDigEncoderControl      = 4,
+		CmdSetPixelClock          = 12,
+		CmdEnableDispPowerGating  = 13,
+		CmdBlankCrtc              = 34,
+		CmdEnableCrtc             = 35,
+		CmdSelectCrtcSource       = 42,
+		CmdSetDceClock            = 46,
+		CmdSetCrtcUsingDtdTiming  = 49,
+		CmdDig1TransmitterControl = 76,
+		CmdProcessAuxChannel      = 78,
+		CmdFunctionCount          = 81,
+	};
+
+	struct CmdTableInfo {
+		size_t   offset;      // absolute offset of the bytecode blob
+		uint16_t size;        // blob size incl. header
+		uint8_t  formatRev;
+		uint8_t  contentRev;
+	};
+
+	// Look up one command function; returns false if the VBIOS does not
+	// implement it (offset 0) or the entry is out of bounds.
+	bool getCommandTable(uint8_t index, CmdTableInfo &out) const;
+
 	static ConnectorType connectorType(uint16_t connectorObjId);
 	static const char   *connectorName(ConnectorType type);
 
@@ -158,6 +189,7 @@ private:
 	size_t base   { 0 };      // VBIOS image offset in data
 	size_t length { 0 };      // VBIOS image length
 	size_t masterDataTable { 0 };  // absolute offset of master data table
+	size_t masterCmdTable  { 0 };  // absolute offset of master command table
 	uint16_t subsysVid { 0 };
 	uint16_t subsysId  { 0 };
 	bool valid { false };
