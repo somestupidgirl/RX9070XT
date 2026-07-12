@@ -199,6 +199,12 @@ class RDNA4FB : public IOFramebuffer {
 	volatile uint32_t *cursorVram { nullptr };
 	uint32_t *cursorStage { nullptr };  // convertCursorImage staging buffer
 	uint64_t  cursorMcAddr { 0 };       // GPU (MC) address of the sprite
+	uint64_t  scanoutMcAddr { 0 };      // GPU (MC) address of the framebuffer
+	// rdna4-curtest=1: fetch the cursor sprite from the scanout base instead
+	// of the private slot. The scanout is proven-fetchable memory with 0xFF
+	// alpha, so a visible floating square = cursor engine works and the bug
+	// is sprite addressing; still invisible = composition-stage problem.
+	bool      hwCursorTest { false };
 	// CURSOR_CONTROL image built by setCursorImage (mode/pitch/lines-per-
 	// chunk); setCursorState ORs the enable bit in.
 	uint32_t  cursorCtlBase { 0 };

@@ -1146,6 +1146,22 @@ bool RDNA4FB::initHWCursor() {
 		return false;
 	}
 	uint64_t scanoutMc = (static_cast<uint64_t>(hi & 0xffff) << 32) | lo;
+	scanoutMcAddr = scanoutMc;
+
+	uint32_t ctest = 0;
+	if (PE_parse_boot_argn("rdna4-curtest", &ctest, sizeof(ctest)) && ctest != 0) {
+		hwCursorTest = true;
+		FBLOG("cursor: TEST MODE: sprite will fetch from the scanout base");
+	}
+
+	// Address-routing state (read-only): the DCHUBBUB FB/AGP windows and the
+	// per-HUBP system aperture decide where cursor memory requests actually
+	// go. Out-of-window requests return zeros without latching any error.
+	FBLOG("cursor: vm: fb_loc base=0x%08x top=0x%08x agp base=0x%08x "
+	      "bot=0x%08x top=0x%08x sys_ap=0x%08x/0x%08x l1_tlb=0x%08x",
+	      regReadDmu(2, 0x0475), regReadDmu(2, 0x0476),
+	      regReadDmu(2, 0x047a), regReadDmu(2, 0x0478), regReadDmu(2, 0x0479),
+	      regReadDmu(2, 0x062c), regReadDmu(2, 0x062d), regReadDmu(2, 0x063a));
 
 	// Sprite right after the framebuffer, 8 KiB aligned. The CPU sees VRAM
 	// through the BAR at the same linear offsets as the MC addresses, so the
@@ -1269,8 +1285,9 @@ IOReturn RDNA4FB::setCursorImage(void *cursorImage) {
 		      opaqueVal == vramVal ? "(match)" : "(MISMATCH - aperture wrong)");
 	}
 
-	regWriteDmu(2, kCurAddrHigh, static_cast<uint32_t>(cursorMcAddr >> 32) & 0xffff);
-	regWriteDmu(2, kCurAddr, static_cast<uint32_t>(cursorMcAddr));
+	uint64_t spriteAddr = hwCursorTest ? scanoutMcAddr : cursorMcAddr;
+	regWriteDmu(2, kCurAddrHigh, static_cast<uint32_t>(spriteAddr >> 32) & 0xffff);
+	regWriteDmu(2, kCurAddr, static_cast<uint32_t>(spriteAddr));
 	regWriteDmu(2, kCurSize, h | (w << 16));
 	// setCursorState receives hotspot-adjusted top-left coords, so the
 	// hardware hotspot stays zero.
