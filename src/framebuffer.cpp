@@ -1056,6 +1056,15 @@ constexpr uint32_t kCurPosition = 0x067d;
 constexpr uint32_t kCurHotSpot  = 0x067e;
 constexpr uint32_t kCurDstOffset = 0x0680;
 constexpr uint32_t kCmCur0Control = 0x0cf1;
+// DCN 4.01 cursor FP pipeline (new on this generation): cursor pixels are
+// multiplied by an FP16 scale before blending. The GOP never uses a cursor
+// and leaves scale at 0.0 — every register and the sprite data verify
+// perfectly while the cursor renders as nothing. 0x3c00 is FP16 1.0, the
+// default from dcn10_set_cursor_sdr_white_level; bias 0; matrix bypass (0).
+constexpr uint32_t kCmCur0FpScaleBiasGY = 0x0cf4;  // SCALE [15:0], BIAS [31:16]
+constexpr uint32_t kCmCur0FpScaleBiasRB = 0x0cf5;
+constexpr uint32_t kCmCur0MatrixMode    = 0x0cf6;
+constexpr uint32_t kCurFpScaleOne       = 0x3c00;  // FP16 1.0
 // HUBPREQ0_CURSOR_SETTINGS — cursor fetch scheduling. amdgpu always programs
 // CHUNK_HDL_ADJUST=3 ([9:8]); without it and a correct LINES_PER_CHUNK the
 // cursor request pipeline can fetch nothing (sprite armed but invisible).
@@ -1205,17 +1214,24 @@ IOReturn RDNA4FB::setCursorImage(void *cursorImage) {
 	                (kCursorPitchCode << kCurPitchShift) |
 	                (hwCursorMode << kCurModeShift);
 	regWriteDmu(2, kCurControl, cursorCtlBase | (hwCursorVisible ? 1u : 0u));
+	// The FP scale stage: without FP16 1.0 here the sprite is multiplied
+	// to invisibility (found on hardware 2026-07-12).
+	regWriteDmu(2, kCmCur0FpScaleBiasGY, kCurFpScaleOne);
+	regWriteDmu(2, kCmCur0FpScaleBiasRB, kCurFpScaleOne);
+	regWriteDmu(2, kCmCur0MatrixMode, 0);   // matrix bypass
 	regWriteDmu(2, kCmCur0Control,
 	            (hwCursorMode << kCur0ModeShift) | (hwCursorVisible ? 1u : 0u));
 
 	if (cursorImgLogs < 3) {
 		cursorImgLogs++;
 		FBLOG("cursor: image %ux%u px0=0x%08x rb: ctl=0x%08x size=0x%08x "
-		      "addr=0x%08x/%04x set=0x%08x cm=0x%08x",
+		      "addr=0x%08x/%04x set=0x%08x cm=0x%08x fp=0x%08x/0x%08x",
 		      w, h, cursorStage[0],
 		      regReadDmu(2, kCurControl), regReadDmu(2, kCurSize),
 		      regReadDmu(2, kCurAddr), regReadDmu(2, kCurAddrHigh) & 0xffff,
-		      regReadDmu(2, kCurSettings), regReadDmu(2, kCmCur0Control));
+		      regReadDmu(2, kCurSettings), regReadDmu(2, kCmCur0Control),
+		      regReadDmu(2, kCmCur0FpScaleBiasGY),
+		      regReadDmu(2, kCmCur0FpScaleBiasRB));
 	}
 	return kIOReturnSuccess;
 }
