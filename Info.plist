@@ -5,13 +5,13 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>en</string>
 	<key>CFBundleExecutable</key>
-	<string>RX9070XT</string>
+	<string>RDNA4FB</string>
 	<key>CFBundleIdentifier</key>
-	<string>com.hackintosh.RX9070XT</string>
+	<string>com.hackintosh.RDNA4FB</string>
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleName</key>
-	<string>RX9070XT</string>
+	<string>RDNA4FB</string>
 	<key>CFBundlePackageType</key>
 	<string>KEXT</string>
 	<key>CFBundleShortVersionString</key>
@@ -26,12 +26,12 @@
 	<dict>
 		<!-- Framebuffer personality: matches the RX 9070 XT (Navi 48) PCI
 		     device. IOPCIPrimaryMatch is 0xDEVICEVENDOR = 0x7550 / 0x1002. -->
-		<key>RX9070XTFB</key>
+		<key>RDNA4FB</key>
 		<dict>
 			<key>CFBundleIdentifier</key>
-			<string>com.hackintosh.RX9070XT</string>
+			<string>com.hackintosh.RDNA4FB</string>
 			<key>IOClass</key>
-			<string>RX9070XTFB</string>
+			<string>RDNA4FB</string>
 			<key>IOProviderClass</key>
 			<string>IOPCIDevice</string>
 			<key>IOPCIPrimaryMatch</key>

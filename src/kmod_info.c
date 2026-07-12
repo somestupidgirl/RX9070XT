@@ -1,6 +1,6 @@
 //
 //  kmod_info.c
-//  RX9070XT
+//  RDNA4FB
 //
 //  Hand-written replacement for the kmod_info glue that Xcode's kext build
 //  normally generates from CreateKModInfo.perl.
@@ -11,7 +11,7 @@
 //    * this file defines _realmain / _antimain and the kmod_info struct.
 //
 //  The kext is a plain IOKit driver (no Lilu linkage): all work happens in
-//  the RX9070XTFB class instantiated by IOKit matching, so the module entry
+//  the RDNA4FB class instantiated by IOKit matching, so the module entry
 //  points have nothing to do.
 //
 
@@ -23,17 +23,17 @@
 extern kern_return_t _start(kmod_info_t *ki, void *data);
 extern kern_return_t _stop(kmod_info_t *ki, void *data);
 
-static kern_return_t rx9070xt_kmod_start(kmod_info_t *ki, void *data) {
+static kern_return_t rdna4_kmod_start(kmod_info_t *ki, void *data) {
 	(void)ki; (void)data;
 	return KERN_SUCCESS;
 }
 
-static kern_return_t rx9070xt_kmod_stop(kmod_info_t *ki, void *data) {
+static kern_return_t rdna4_kmod_stop(kmod_info_t *ki, void *data) {
 	(void)ki; (void)data;
 	return KERN_SUCCESS;
 }
 
-KMOD_EXPLICIT_DECL(com.hackintosh.RX9070XT, "0.0.1", _start, _stop)
+KMOD_EXPLICIT_DECL(com.hackintosh.RDNA4FB, "0.0.1", _start, _stop)
 
-__private_extern__ kmod_start_func_t *_realmain = rx9070xt_kmod_start;
-__private_extern__ kmod_stop_func_t  *_antimain = rx9070xt_kmod_stop;
+__private_extern__ kmod_start_func_t *_realmain = rdna4_kmod_start;
+__private_extern__ kmod_stop_func_t  *_antimain = rdna4_kmod_stop;

@@ -1,23 +1,23 @@
 //
-//  RX9070XTFB.cpp
-//  RX9070XT
+//  framebuffer.cpp
+//  RDNA4FB
 //
 
-#include "RX9070XTFB.hpp"
-#include "Edid.hpp"
+#include "framebuffer.hpp"
+#include "edid.hpp"
 #include <IOKit/IOLib.h>
 #include <IOKit/IODeviceMemory.h>
 #include <IOKit/pwr_mgt/IOPM.h>
 
-#define FBLOG(fmt, ...)  IOLog("RX9070XTFB: " fmt "\n", ## __VA_ARGS__)
+#define FBLOG(fmt, ...)  IOLog("RDNA4FB: " fmt "\n", ## __VA_ARGS__)
 
-OSDefineMetaClassAndStructors(RX9070XTFB, IOFramebuffer)
+OSDefineMetaClassAndStructors(RDNA4FB, IOFramebuffer)
 
 // ---------------------------------------------------------------------------
 // Console framebuffer discovery
 // ---------------------------------------------------------------------------
 
-bool RX9070XTFB::captureConsoleInfo() {
+bool RDNA4FB::captureConsoleInfo() {
 	IOPlatformExpert *platform = getPlatform();
 	if (!platform) {
 		FBLOG("no platform expert");
@@ -84,7 +84,7 @@ bool RX9070XTFB::captureConsoleInfo() {
 // the legacy image within it is ~58 KiB.
 static constexpr size_t kMaxVBIOSSize = 2 * 1024 * 1024;
 
-bool RX9070XTFB::copyVBIOSFromProperty() {
+bool RDNA4FB::copyVBIOSFromProperty() {
 	// OpenCore DeviceProperties (or WhateverGreen) can inject the VBIOS as
 	// ATY,bin_image on the GPU's PCI node. Preferred: no hardware access.
 	auto *rom = OSDynamicCast(OSData, pciDevice->getProperty("ATY,bin_image"));
@@ -102,7 +102,7 @@ bool RX9070XTFB::copyVBIOSFromProperty() {
 	return true;
 }
 
-bool RX9070XTFB::copyVBIOSFromExpansionROM() {
+bool RDNA4FB::copyVBIOSFromExpansionROM() {
 	// Size the expansion ROM BAR, then map and copy it with decode enabled.
 	uint32_t saved = pciDevice->configRead32(kIOPCIConfigExpansionROMBase);
 	pciDevice->configWrite32(kIOPCIConfigExpansionROMBase, 0xFFFFF800);
@@ -141,7 +141,7 @@ bool RX9070XTFB::copyVBIOSFromExpansionROM() {
 	return ok;
 }
 
-void RX9070XTFB::freeVBIOS() {
+void RDNA4FB::freeVBIOS() {
 	if (vbiosData) {
 		IOFree(vbiosData, vbiosSize);
 		vbiosData = nullptr;
@@ -149,7 +149,7 @@ void RX9070XTFB::freeVBIOS() {
 	}
 }
 
-void RX9070XTFB::publishVBIOSInfo() {
+void RDNA4FB::publishVBIOSInfo() {
 	char name[64];
 	if (atomBios.configName(name, sizeof(name)))
 		setProperty("AtomBIOS,ImageName", name);
@@ -185,7 +185,7 @@ void RX9070XTFB::publishVBIOSInfo() {
 	}
 }
 
-bool RX9070XTFB::loadVBIOS() {
+bool RDNA4FB::loadVBIOS() {
 	if (!copyVBIOSFromProperty() && !copyVBIOSFromExpansionROM()) {
 		FBLOG("VBIOS: no image available (inject ATY,bin_image via DeviceProperties)");
 		return false;
@@ -247,7 +247,7 @@ bool RX9070XTFB::loadVBIOS() {
 // Register MMIO (BAR5)
 // ---------------------------------------------------------------------------
 
-bool RX9070XTFB::mapRegisters() {
+bool RDNA4FB::mapRegisters() {
 	// On AMD dGPUs since Bonaire the register aperture is BAR5 (BAR0/1 is the
 	// VRAM aperture, BAR2/3 doorbells) — amdgpu_device.c does the same.
 	IODeviceMemory *bar = pciDevice->getDeviceMemoryWithRegister(kIOPCIConfigBaseAddress5);
@@ -268,7 +268,7 @@ bool RX9070XTFB::mapRegisters() {
 	return true;
 }
 
-void RX9070XTFB::unmapRegisters() {
+void RDNA4FB::unmapRegisters() {
 	rmmio = nullptr;
 	rmmioSize = 0;
 	if (rmmioMap) {
@@ -277,13 +277,13 @@ void RX9070XTFB::unmapRegisters() {
 	}
 }
 
-uint32_t RX9070XTFB::regRead32(uint32_t byteOffset) const {
+uint32_t RDNA4FB::regRead32(uint32_t byteOffset) const {
 	if (!rmmio || byteOffset + 4 > rmmioSize)
 		return 0xFFFFFFFF;
 	return rmmio[byteOffset / 4];
 }
 
-uint32_t RX9070XTFB::regReadDmu(uint8_t baseIdx, uint32_t dwordOffset) const {
+uint32_t RDNA4FB::regReadDmu(uint8_t baseIdx, uint32_t dwordOffset) const {
 	uint32_t byteOffset;
 	if (!ipDiscovery.isValid() ||
 	    !ipDiscovery.regByteOffset(IpDiscovery::HwDmu, 0, baseIdx, dwordOffset, byteOffset))
@@ -291,7 +291,7 @@ uint32_t RX9070XTFB::regReadDmu(uint8_t baseIdx, uint32_t dwordOffset) const {
 	return regRead32(byteOffset);
 }
 
-void RX9070XTFB::dumpDCN() {
+void RDNA4FB::dumpDCN() {
 	if (!ipDiscovery.isValid()) {
 		FBLOG("dcn: no discovery bases, skipping register dump");
 		return;
@@ -345,11 +345,11 @@ void RX9070XTFB::dumpDCN() {
 		      regReadDmu(3, mcm[i][2]));
 	FBLOG("dcn: --- end register dump ---");
 
-	// Boot-arg "rx9070xt-lutbypass=1": force all MCM stages to bypass.
+	// Boot-arg "rdna4-lutbypass=1": force all MCM stages to bypass.
 	// Bypass is the hardware's pass-through state, so this cannot make the
 	// image worse than a wrong LUT; a reboot restores firmware state.
 	uint32_t fix = 0;
-	if (PE_parse_boot_argn("rx9070xt-lutbypass", &fix, sizeof(fix)) && fix != 0) {
+	if (PE_parse_boot_argn("rdna4-lutbypass", &fix, sizeof(fix)) && fix != 0) {
 		for (int i = 0; i < 4; i++) {
 			regWriteDmu(3, mcm[i][0], 0);  // shaper: bypass
 			regWriteDmu(3, mcm[i][1], 0);  // 3DLUT: bypass
@@ -416,11 +416,11 @@ constexpr uint8_t kDdcSlave  = 0x50; // VESA DDC/EDID I2C address
 constexpr uint8_t kAuxRetry  = 7;    // per-transaction defer retries
 } // namespace
 
-uint32_t RX9070XTFB::auxDword(uint8_t inst, uint32_t reg) const {
+uint32_t RDNA4FB::auxDword(uint8_t inst, uint32_t reg) const {
 	return kAuxBase0 + static_cast<uint32_t>(inst) * kAuxStride + reg;
 }
 
-int RX9070XTFB::auxTransaction(uint8_t inst, uint8_t action, uint32_t address,
+int RDNA4FB::auxTransaction(uint8_t inst, uint8_t action, uint32_t address,
                                const uint8_t *data, uint8_t len,
                                uint8_t *reply, uint8_t replyCap,
                                uint8_t *replyBytes) {
@@ -532,7 +532,7 @@ int RX9070XTFB::auxTransaction(uint8_t inst, uint8_t action, uint32_t address,
 	return replyCode;
 }
 
-bool RX9070XTFB::readEDID(uint8_t inst, uint8_t *edid, size_t count,
+bool RDNA4FB::readEDID(uint8_t inst, uint8_t *edid, size_t count,
                           uint8_t start) {
 	uint8_t rb = 0;
 
@@ -570,12 +570,12 @@ bool RX9070XTFB::readEDID(uint8_t inst, uint8_t *edid, size_t count,
 	return true;
 }
 
-void RX9070XTFB::probeEDID() {
+void RDNA4FB::probeEDID() {
 	// Default-on since the AUX path was verified on hardware (2026-07-11);
-	// "rx9070xt-noedid=1" opts out if a sink misbehaves.
+	// "rdna4-noedid=1" opts out if a sink misbehaves.
 	uint32_t noedid = 0;
-	if (PE_parse_boot_argn("rx9070xt-noedid", &noedid, sizeof(noedid)) && noedid != 0) {
-		FBLOG("edid: probing disabled by rx9070xt-noedid");
+	if (PE_parse_boot_argn("rdna4-noedid", &noedid, sizeof(noedid)) && noedid != 0) {
+		FBLOG("edid: probing disabled by rdna4-noedid");
 		return;
 	}
 	if (!ipDiscovery.isValid() || !rmmio) {
@@ -734,7 +734,7 @@ constexpr uint32_t kI2cIndexWrite     = 1u << 31;
 constexpr uint32_t kMicrosecondTimeBaseDiv = 0x007b;
 } // namespace
 
-bool RX9070XTFB::readEDIDI2C(uint8_t line, uint8_t *edid, size_t count,
+bool RDNA4FB::readEDIDI2C(uint8_t line, uint8_t *edid, size_t count,
                              uint8_t start) {
 	if (!ipDiscovery.isValid() || !rmmio || count == 0 || count > 256)
 		return false;
@@ -845,9 +845,9 @@ bool RX9070XTFB::readEDIDI2C(uint8_t line, uint8_t *edid, size_t count,
 	return true;
 }
 
-void RX9070XTFB::dumpModeState() {
+void RDNA4FB::dumpModeState() {
 	uint32_t on = 0;
-	if (!PE_parse_boot_argn("rx9070xt-modedump", &on, sizeof(on)) || on == 0)
+	if (!PE_parse_boot_argn("rdna4-modedump", &on, sizeof(on)) || on == 0)
 		return;
 	if (!ipDiscovery.isValid() || !rmmio)
 		return;
@@ -913,7 +913,7 @@ void RX9070XTFB::dumpModeState() {
 	FBLOG("mode: --- end survey ---");
 }
 
-void RX9070XTFB::setDisplayPower(bool on) {
+void RDNA4FB::setDisplayPower(bool on) {
 	if (!displaySleepEnabled || on == displayPowerOn)
 		return;
 	if (!ipDiscovery.isValid() || !rmmio)
@@ -968,14 +968,14 @@ void RX9070XTFB::setDisplayPower(bool on) {
 // Emulated VBL interrupt
 // ---------------------------------------------------------------------------
 
-void RX9070XTFB::fireVBL(IOTimerEventSource *sender) {
+void RDNA4FB::fireVBL(IOTimerEventSource *sender) {
 	if (vblProc && vblEnabled)
 		vblProc(vblTarget, vblRef);
 	if (sender && vblEnabled)
 		sender->setTimeoutUS(vblPeriodUS);
 }
 
-IOReturn RX9070XTFB::registerForInterruptType(IOSelect interruptType,
+IOReturn RDNA4FB::registerForInterruptType(IOSelect interruptType,
                                               IOFBInterruptProc proc,
                                               OSObject *target, void *ref,
                                               void **interruptRef) {
@@ -997,7 +997,7 @@ IOReturn RX9070XTFB::registerForInterruptType(IOSelect interruptType,
 	if (!vblTimer) {
 		vblTimer = IOTimerEventSource::timerEventSource(this,
 		    OSMemberFunctionCast(IOTimerEventSource::Action, this,
-		                         &RX9070XTFB::fireVBL));
+		                         &RDNA4FB::fireVBL));
 		if (!vblTimer || !getWorkLoop() ||
 		    getWorkLoop()->addEventSource(vblTimer) != kIOReturnSuccess) {
 			if (vblTimer) {
@@ -1017,7 +1017,7 @@ IOReturn RX9070XTFB::registerForInterruptType(IOSelect interruptType,
 	return kIOReturnSuccess;
 }
 
-IOReturn RX9070XTFB::unregisterInterrupt(void *interruptRef) {
+IOReturn RDNA4FB::unregisterInterrupt(void *interruptRef) {
 	if (interruptRef != &vblProc)
 		return super::unregisterInterrupt(interruptRef);
 	vblEnabled = false;
@@ -1027,7 +1027,7 @@ IOReturn RX9070XTFB::unregisterInterrupt(void *interruptRef) {
 	return kIOReturnSuccess;
 }
 
-IOReturn RX9070XTFB::setInterruptState(void *interruptRef, UInt32 state) {
+IOReturn RDNA4FB::setInterruptState(void *interruptRef, UInt32 state) {
 	if (interruptRef != &vblProc)
 		return super::setInterruptState(interruptRef, state);
 	// IOFramebuffer throttles VBL when idle (vblThrottle) and re-enables it
@@ -1074,7 +1074,7 @@ constexpr uint32_t kCursorPitchCode = 1;              // 0=64,1=128,2=256 px
 constexpr uint32_t kCursorBytes  = kCursorPixels * kCursorPixels * 4;
 } // namespace
 
-bool RX9070XTFB::initHWCursor() {
+bool RDNA4FB::initHWCursor() {
 	if (!hwCursorRequested || !ipDiscovery.isValid() || !rmmio ||
 	    fbPhysBase == 0 || fbLength == 0)
 		return false;
@@ -1124,7 +1124,7 @@ bool RX9070XTFB::initHWCursor() {
 	return true;
 }
 
-IOReturn RX9070XTFB::setCursorImage(void *cursorImage) {
+IOReturn RDNA4FB::setCursorImage(void *cursorImage) {
 	if (!hwCursorReady)
 		return kIOReturnUnsupported;
 
@@ -1169,7 +1169,7 @@ IOReturn RX9070XTFB::setCursorImage(void *cursorImage) {
 	return kIOReturnSuccess;
 }
 
-IOReturn RX9070XTFB::setCursorState(SInt32 x, SInt32 y, bool visible) {
+IOReturn RDNA4FB::setCursorState(SInt32 x, SInt32 y, bool visible) {
 	if (!hwCursorReady)
 		return kIOReturnUnsupported;
 
@@ -1190,7 +1190,7 @@ IOReturn RX9070XTFB::setCursorState(SInt32 x, SInt32 y, bool visible) {
 	return kIOReturnSuccess;
 }
 
-void RX9070XTFB::initForPM() {
+void RDNA4FB::initForPM() {
 	if (pmRegistered)
 		return;
 	pmRegistered = true;
@@ -1224,7 +1224,7 @@ void RX9070XTFB::initForPM() {
 	FBLOG("power: registered power states (doze-only, system sleep vetoed)");
 }
 
-bool RX9070XTFB::regWriteDmu(uint8_t baseIdx, uint32_t dwordOffset, uint32_t value) {
+bool RDNA4FB::regWriteDmu(uint8_t baseIdx, uint32_t dwordOffset, uint32_t value) {
 	uint32_t byteOffset;
 	if (!ipDiscovery.isValid() ||
 	    !ipDiscovery.regByteOffset(IpDiscovery::HwDmu, 0, baseIdx, dwordOffset, byteOffset))
@@ -1235,9 +1235,9 @@ bool RX9070XTFB::regWriteDmu(uint8_t baseIdx, uint32_t dwordOffset, uint32_t val
 	return true;
 }
 
-void RX9070XTFB::tryForce8bpc() {
+void RDNA4FB::tryForce8bpc() {
 	uint32_t v = 0;
-	if (!PE_parse_boot_argn("rx9070xt-8bpc", &v, sizeof(v)) || v == 0)
+	if (!PE_parse_boot_argn("rdna4-8bpc", &v, sizeof(v)) || v == 0)
 		return;
 
 	// DP0 stream encoder (the active one on this machine).
@@ -1265,7 +1265,7 @@ void RX9070XTFB::tryForce8bpc() {
 	      regReadDmu(2, kDpPixelFormat), regReadDmu(2, kDpMsaColorimetry));
 }
 
-void RX9070XTFB::probeMemSize() {
+void RDNA4FB::probeMemSize() {
 	// RCC_DEV0_EPF0_RCC_CONFIG_MEMSIZE (NBIF 6.3.1 seg 2, dword 0x00c3):
 	// VRAM size in MiB — amdgpu's nbif_v6_3_1_get_memsize. The byte offset
 	// below was derived from this card's IP discovery table (base 0xd20)
@@ -1298,13 +1298,13 @@ void RX9070XTFB::probeMemSize() {
 // IOService
 // ---------------------------------------------------------------------------
 
-IOService *RX9070XTFB::probe(IOService *provider, SInt32 *score) {
-	// Kill switch: boot-arg "rx9070xt-off=1" (no leading dash) disables the
+IOService *RDNA4FB::probe(IOService *provider, SInt32 *score) {
+	// Kill switch: boot-arg "rdna4-off=1" (no leading dash) disables the
 	// driver without removing it, so a bad build can be recovered from the
 	// OpenCore boot-args instead of Safe Mode / filesystem surgery.
 	uint32_t off = 0;
-	if (PE_parse_boot_argn("rx9070xt-off", &off, sizeof(off)) && off != 0) {
-		FBLOG("disabled by rx9070xt-off boot-arg");
+	if (PE_parse_boot_argn("rdna4-off", &off, sizeof(off)) && off != 0) {
+		FBLOG("disabled by rdna4-off boot-arg");
 		return nullptr;
 	}
 
@@ -1330,7 +1330,7 @@ IOService *RX9070XTFB::probe(IOService *provider, SInt32 *score) {
 	return this;
 }
 
-bool RX9070XTFB::start(IOService *provider) {
+bool RDNA4FB::start(IOService *provider) {
 	pciDevice = OSDynamicCast(IOPCIDevice, provider);
 	if (!pciDevice) {
 		FBLOG("start: no PCI provider");
@@ -1338,26 +1338,26 @@ bool RX9070XTFB::start(IOService *provider) {
 	}
 
 	uint32_t cmap = 0;
-	if (PE_parse_boot_argn("rx9070xt-cmap", &cmap, sizeof(cmap)) && cmap <= 5) {
+	if (PE_parse_boot_argn("rdna4-cmap", &cmap, sizeof(cmap)) && cmap <= 5) {
 		channelMap = cmap;
 		FBLOG("start: using channel map %u", channelMap);
 	}
 
 	uint32_t nosleep = 0;
-	if (PE_parse_boot_argn("rx9070xt-nosleep", &nosleep, sizeof(nosleep)) && nosleep != 0) {
+	if (PE_parse_boot_argn("rdna4-nosleep", &nosleep, sizeof(nosleep)) && nosleep != 0) {
 		displaySleepEnabled = false;
-		FBLOG("start: display sleep disabled by rx9070xt-nosleep");
+		FBLOG("start: display sleep disabled by rdna4-nosleep");
 	}
 
 	uint32_t vbl = 0;
-	if (PE_parse_boot_argn("rx9070xt-vbl", &vbl, sizeof(vbl)) && vbl != 0)
+	if (PE_parse_boot_argn("rdna4-vbl", &vbl, sizeof(vbl)) && vbl != 0)
 		vblRequested = true;
 
 	uint32_t hwcur = 0;
-	if (PE_parse_boot_argn("rx9070xt-hwcursor", &hwcur, sizeof(hwcur)) && hwcur != 0) {
+	if (PE_parse_boot_argn("rdna4-hwcursor", &hwcur, sizeof(hwcur)) && hwcur != 0) {
 		hwCursorRequested = true;
 		uint32_t cmode = 0;
-		if (PE_parse_boot_argn("rx9070xt-curmode", &cmode, sizeof(cmode)) && cmode <= 3)
+		if (PE_parse_boot_argn("rdna4-curmode", &cmode, sizeof(cmode)) && cmode <= 3)
 			hwCursorMode = cmode;
 	}
 
@@ -1395,7 +1395,7 @@ bool RX9070XTFB::start(IOService *provider) {
 	return true;
 }
 
-void RX9070XTFB::stop(IOService *provider) {
+void RDNA4FB::stop(IOService *provider) {
 	FBLOG("stop");
 	vblEnabled = false;
 	vblProc = nullptr;
@@ -1425,7 +1425,7 @@ void RX9070XTFB::stop(IOService *provider) {
 // IOFramebuffer — bring-up
 // ---------------------------------------------------------------------------
 
-IOReturn RX9070XTFB::enableController() {
+IOReturn RDNA4FB::enableController() {
 	// The controller is already "enabled": the firmware programmed the display
 	// pipe and scanout address. We just re-validate the console geometry.
 	if (fbPhysBase == 0 && !captureConsoleInfo())
@@ -1443,7 +1443,7 @@ IOReturn RX9070XTFB::enableController() {
 	return kIOReturnSuccess;
 }
 
-bool RX9070XTFB::isConsoleDevice() {
+bool RDNA4FB::isConsoleDevice() {
 	return true;
 }
 
@@ -1451,7 +1451,7 @@ bool RX9070XTFB::isConsoleDevice() {
 // IOFramebuffer — memory
 // ---------------------------------------------------------------------------
 
-IODeviceMemory *RX9070XTFB::getApertureRange(IOPixelAperture aperture) {
+IODeviceMemory *RDNA4FB::getApertureRange(IOPixelAperture aperture) {
 	if (aperture != kIOFBSystemAperture)
 		return nullptr;
 	if (fbPhysBase == 0 || fbLength == 0)
@@ -1461,7 +1461,7 @@ IODeviceMemory *RX9070XTFB::getApertureRange(IOPixelAperture aperture) {
 	return IODeviceMemory::withRange(fbPhysBase, fbLength);
 }
 
-IODeviceMemory *RX9070XTFB::getVRAMRange() {
+IODeviceMemory *RDNA4FB::getVRAMRange() {
 	// We expose only the scanout region as "VRAM"; we do not manage the card's
 	// full VRAM because we have no memory controller driver.
 	if (fbPhysBase == 0 || fbLength == 0)
@@ -1473,27 +1473,27 @@ IODeviceMemory *RX9070XTFB::getVRAMRange() {
 // IOFramebuffer — pixel / mode description
 // ---------------------------------------------------------------------------
 
-const char *RX9070XTFB::getPixelFormats() {
+const char *RDNA4FB::getPixelFormats() {
 	// NUL-separated, double-NUL terminated list. IO32BitDirectPixels is a
 	// string literal macro from IOGraphicsTypes.h.
 	static const char formats[] = IO32BitDirectPixels "\0";
 	return formats;
 }
 
-IOItemCount RX9070XTFB::getDisplayModeCount() {
+IOItemCount RDNA4FB::getDisplayModeCount() {
 	return 1;
 }
 
-IOReturn RX9070XTFB::getDisplayModes(IODisplayModeID *allDisplayModes) {
+IOReturn RDNA4FB::getDisplayModes(IODisplayModeID *allDisplayModes) {
 	if (!allDisplayModes)
 		return kIOReturnBadArgument;
-	allDisplayModes[0] = kRX9070XTDisplayModeID;
+	allDisplayModes[0] = kRDNA4DisplayModeID;
 	return kIOReturnSuccess;
 }
 
-IOReturn RX9070XTFB::getInformationForDisplayMode(IODisplayModeID displayMode,
+IOReturn RDNA4FB::getInformationForDisplayMode(IODisplayModeID displayMode,
                                                   IODisplayModeInformation *info) {
-	if (displayMode != kRX9070XTDisplayModeID || !info)
+	if (displayMode != kRDNA4DisplayModeID || !info)
 		return kIOReturnBadArgument;
 
 	bzero(info, sizeof(*info));
@@ -1505,15 +1505,15 @@ IOReturn RX9070XTFB::getInformationForDisplayMode(IODisplayModeID displayMode,
 	return kIOReturnSuccess;
 }
 
-UInt64 RX9070XTFB::getPixelFormatsForDisplayMode(IODisplayModeID, IOIndex) {
+UInt64 RDNA4FB::getPixelFormatsForDisplayMode(IODisplayModeID, IOIndex) {
 	// Obsolete: must return 0.
 	return 0;
 }
 
-IOReturn RX9070XTFB::getPixelInformation(IODisplayModeID displayMode, IOIndex depth,
+IOReturn RDNA4FB::getPixelInformation(IODisplayModeID displayMode, IOIndex depth,
                                          IOPixelAperture aperture,
                                          IOPixelInformation *pixelInfo) {
-	if (displayMode != kRX9070XTDisplayModeID || depth != 0 ||
+	if (displayMode != kRDNA4DisplayModeID || depth != 0 ||
 	    aperture != kIOFBSystemAperture || !pixelInfo)
 		return kIOReturnBadArgument;
 
@@ -1563,15 +1563,15 @@ IOReturn RX9070XTFB::getPixelInformation(IODisplayModeID displayMode, IOIndex de
 // IOFramebuffer — current mode
 // ---------------------------------------------------------------------------
 
-IOReturn RX9070XTFB::getCurrentDisplayMode(IODisplayModeID *displayMode, IOIndex *depth) {
-	if (displayMode) *displayMode = kRX9070XTDisplayModeID;
+IOReturn RDNA4FB::getCurrentDisplayMode(IODisplayModeID *displayMode, IOIndex *depth) {
+	if (displayMode) *displayMode = kRDNA4DisplayModeID;
 	if (depth)       *depth       = 0;
 	return kIOReturnSuccess;
 }
 
-IOReturn RX9070XTFB::setDisplayMode(IODisplayModeID displayMode, IOIndex depth) {
+IOReturn RDNA4FB::setDisplayMode(IODisplayModeID displayMode, IOIndex depth) {
 	// Only one mode/depth exists; accept it, reject anything else.
-	if (displayMode != kRX9070XTDisplayModeID || depth != 0)
+	if (displayMode != kRDNA4DisplayModeID || depth != 0)
 		return kIOReturnUnsupported;
 	return kIOReturnSuccess;
 }
@@ -1580,7 +1580,7 @@ IOReturn RX9070XTFB::setDisplayMode(IODisplayModeID displayMode, IOIndex depth) 
 // IOFramebuffer — attributes / connection
 // ---------------------------------------------------------------------------
 
-IOReturn RX9070XTFB::getAttribute(IOSelect attribute, uintptr_t *value) {
+IOReturn RDNA4FB::getAttribute(IOSelect attribute, uintptr_t *value) {
 	switch (attribute) {
 		case kIOHardwareCursorAttribute:
 			// Report the DCN cursor plane when armed; otherwise force the
@@ -1592,7 +1592,7 @@ IOReturn RX9070XTFB::getAttribute(IOSelect attribute, uintptr_t *value) {
 	}
 }
 
-IOReturn RX9070XTFB::setAttribute(IOSelect attribute, uintptr_t value) {
+IOReturn RDNA4FB::setAttribute(IOSelect attribute, uintptr_t value) {
 	switch (attribute) {
 		case kIOPowerAttribute:
 			// IOFramebuffer asks the subclass to carry out its power state
@@ -1612,11 +1612,11 @@ IOReturn RX9070XTFB::setAttribute(IOSelect attribute, uintptr_t value) {
 	}
 }
 
-IOItemCount RX9070XTFB::getConnectionCount() {
+IOItemCount RDNA4FB::getConnectionCount() {
 	return 1;
 }
 
-IOReturn RX9070XTFB::getAttributeForConnection(IOIndex connectIndex, IOSelect attribute,
+IOReturn RDNA4FB::getAttributeForConnection(IOIndex connectIndex, IOSelect attribute,
                                                uintptr_t *value) {
 	switch (attribute) {
 		case kConnectionEnable:
@@ -1637,7 +1637,7 @@ IOReturn RX9070XTFB::getAttributeForConnection(IOIndex connectIndex, IOSelect at
 	}
 }
 
-IOReturn RX9070XTFB::setAttributeForConnection(IOIndex connectIndex, IOSelect attribute,
+IOReturn RDNA4FB::setAttributeForConnection(IOIndex connectIndex, IOSelect attribute,
                                                uintptr_t value) {
 	switch (attribute) {
 		case kConnectionPower:
@@ -1654,11 +1654,11 @@ IOReturn RX9070XTFB::setAttributeForConnection(IOIndex connectIndex, IOSelect at
 // IOFramebuffer — DDC/EDID
 // ---------------------------------------------------------------------------
 
-bool RX9070XTFB::hasDDCConnect(IOIndex connectIndex) {
+bool RDNA4FB::hasDDCConnect(IOIndex connectIndex) {
 	return connectIndex == 0 && edidLen != 0;
 }
 
-IOReturn RX9070XTFB::getDDCBlock(IOIndex connectIndex, UInt32 blockNumber,
+IOReturn RDNA4FB::getDDCBlock(IOIndex connectIndex, UInt32 blockNumber,
                                  IOSelect blockType, IOOptionBits options,
                                  UInt8 *data, IOByteCount *length) {
 	if (connectIndex != 0 || blockType != kIODDCBlockTypeEDID || !data || !length)

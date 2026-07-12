@@ -1,6 +1,6 @@
 //
-//  OtgTiming.hpp
-//  RX9070XT
+//  otgtiming.hpp
+//  RDNA4FB
 //
 //  Compute DCN OTG (timing generator) register images from an EDID detailed
 //  timing, following amdgpu's optc1_program_timing exactly. The OTG's pixel
@@ -10,14 +10,14 @@
 //
 //  Freestanding: shared by the kext and the host test harness, where the
 //  computed values for the boot display's EDID can be diffed against the
-//  GOP-programmed OTG0 registers from a rx9070xt-modedump log — hardware
+//  GOP-programmed OTG0 registers from a rdna4-modedump log — hardware
 //  validation of this math before any OTG is ever written.
 //
 
 #ifndef OtgTiming_hpp
 #define OtgTiming_hpp
 
-#include "Edid.hpp"
+#include "edid.hpp"
 
 namespace OtgTiming {
 

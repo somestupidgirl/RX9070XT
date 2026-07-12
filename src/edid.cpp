@@ -1,11 +1,11 @@
 //
-//  Edid.cpp
-//  RX9070XT
+//  edid.cpp
+//  RDNA4FB
 //
 //  DTD field packing per VESA E-EDID 1.4 §3.10.2.
 //
 
-#include "Edid.hpp"
+#include "edid.hpp"
 
 namespace Edid {
 

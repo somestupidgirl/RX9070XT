@@ -1,6 +1,6 @@
 //
-//  RX9070XTFB.hpp
-//  RX9070XT
+//  framebuffer.hpp
+//  RDNA4FB
 //
 //  A non-accelerated IOFramebuffer driver for the AMD Radeon RX 9070 XT
 //  (Navi 48 / RDNA 4, PCI 0x1002:0x7550).
@@ -16,8 +16,8 @@
 //  desktop on hardware macOS otherwise has no driver for.
 //
 
-#ifndef RX9070XTFB_hpp
-#define RX9070XTFB_hpp
+#ifndef RDNA4FB_hpp
+#define RDNA4FB_hpp
 
 #include <IOKit/graphics/IOFramebuffer.h>
 #include <IOKit/pci/IOPCIDevice.h>
@@ -25,14 +25,14 @@
 #include <IOKit/IOTimerEventSource.h>
 #include <pexpert/pexpert.h>
 
-#include "AtomBios.hpp"
-#include "IpDiscovery.hpp"
+#include "atombios.hpp"
+#include "ipdiscovery.hpp"
 
 // Single, driver-defined display mode id. Must be in 0x1..0x7fffffff.
-#define kRX9070XTDisplayModeID  ((IODisplayModeID)1)
+#define kRDNA4DisplayModeID  ((IODisplayModeID)1)
 
-class RX9070XTFB : public IOFramebuffer {
-	OSDeclareDefaultStructors(RX9070XTFB)
+class RDNA4FB : public IOFramebuffer {
+	OSDeclareDefaultStructors(RDNA4FB)
 
 	using super = IOFramebuffer;
 
@@ -52,7 +52,7 @@ class RX9070XTFB : public IOFramebuffer {
 	// advertise, so WindowServer's pixels come out channel-rotated. Since
 	// WindowServer writes bytes per the masks we report, permuting those
 	// masks pre-compensates. Selectable at runtime via boot-arg
-	// "rx9070xt-cmap=N" (no leading dash) while we pin down the right order.
+	// "rdna4-cmap=N" (no leading dash) while we pin down the right order.
 	//   0 = R:byte2 G:byte1 B:byte0  (standard ARGB, default)
 	//   1 = R:byte1 G:byte0 B:byte2  (cancels observed (G,B,R) rotation)
 	//   2 = R:byte0 G:byte1 B:byte2  (BGR swap)
@@ -98,7 +98,7 @@ class RX9070XTFB : public IOFramebuffer {
 	// Write counterpart; returns false (and writes nothing) if discovery is
 	// unavailable or the address is out of range.
 	bool regWriteDmu(uint8_t baseIdx, uint32_t dwordOffset, uint32_t value);
-	// Experiment (boot-arg "rx9070xt-8bpc=1"): switch the active DP stream
+	// Experiment (boot-arg "rdna4-8bpc=1"): switch the active DP stream
 	// from 10 bpc to 8 bpc and update the MSA to match, testing whether the
 	// monitor's colour processing misclassifies the GOP's 10 bpc SDR signal.
 	// Bandwidth-reducing, so the link cannot overflow; a reboot restores the
@@ -138,7 +138,7 @@ class RX9070XTFB : public IOFramebuffer {
 	// offset write and the block read as two transactions in one GO, per
 	// amdgpu's dce_i2c_hw.c.
 	bool readEDIDI2C(uint8_t line, uint8_t *edid, size_t count, uint8_t start);
-	// Boot-arg "rx9070xt-modedump=1": read-only survey of the mode-setting
+	// Boot-arg "rdna4-modedump=1": read-only survey of the mode-setting
 	// register landscape — every OTG's timing/enable state, every DIG
 	// front/back-end, the HUBP surface addresses and the DCCG clock muxes.
 	// The active DP pipe is the GOP-programmed reference template for
@@ -148,7 +148,7 @@ class RX9070XTFB : public IOFramebuffer {
 	// Probe each DisplayPort connector's AUX engine for an EDID, validate and
 	// publish it, and cache the first hit for the DDC API below. Issues only
 	// AUX transactions, never reprograms scanout. Runs by default (verified on
-	// hardware 2026-07-11); "rx9070xt-noedid=1" skips it.
+	// hardware 2026-07-11); "rdna4-noedid=1" skips it.
 	void probeEDID();
 
 	// EDID served to IODisplay via hasDDCConnect()/getDDCBlock(): base block
@@ -164,7 +164,7 @@ class RX9070XTFB : public IOFramebuffer {
 	// pipe) and put the sink in D3 via a native-AUX DPCD SET_POWER write; on
 	// reverses both. Restores exactly the bits it cleared — DCN state, clocks
 	// and the timing generator are untouched, so this cannot lose the desktop
-	// short of full GPU power loss. "rx9070xt-nosleep=1" reverts to the old
+	// short of full GPU power loss. "rdna4-nosleep=1" reverts to the old
 	// always-on behaviour.
 	bool displayPowerOn      { true };
 	bool displaySleepEnabled { true };
@@ -185,21 +185,21 @@ class RX9070XTFB : public IOFramebuffer {
 	// software cursor under heavy repaint (Chrome). The sprite lives in VRAM
 	// directly after the GOP framebuffer; its GPU address comes from the
 	// scanout address in HUBPREQ0 plus the same delta applied to the CPU
-	// aperture. Opt-in via rx9070xt-hwcursor=1 until hardware-verified.
+	// aperture. Opt-in via rdna4-hwcursor=1 until hardware-verified.
 	bool initHWCursor();
 	bool hwCursorRequested { false };
 	bool hwCursorReady     { false };
 	bool hwCursorVisible   { false };
 	// CURSOR_MODE: 2 = premultiplied ARGB (default), 1 = straight alpha.
 	// If the pointer renders with dark/bright fringes, flip with
-	// rx9070xt-curmode=1.
+	// rdna4-curmode=1.
 	uint32_t hwCursorMode  { 2 };
 	IOMemoryMap       *cursorMap  { nullptr };
 	volatile uint32_t *cursorVram { nullptr };
 	uint32_t *cursorStage { nullptr };  // convertCursorImage staging buffer
 	uint64_t  cursorMcAddr { 0 };       // GPU (MC) address of the sprite
 
-	// Emulated vertical-blank "interrupt" (rx9070xt-vbl=1). IOFramebuffer
+	// Emulated vertical-blank "interrupt" (rdna4-vbl=1). IOFramebuffer
 	// only engages its frame-pacing machinery (CVDisplayLink timestamps,
 	// deferred cursor moves, vbl throttling) if the subclass provides VBL
 	// service via registerForInterruptType — which we cannot do from real
@@ -278,4 +278,4 @@ public:
 	bool isConsoleDevice() override;
 };
 
-#endif /* RX9070XTFB_hpp */
+#endif /* RDNA4FB_hpp */

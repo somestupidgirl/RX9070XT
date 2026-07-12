@@ -1,11 +1,11 @@
 //
-//  IpDiscovery.cpp
-//  RX9070XT
+//  ipdiscovery.cpp
+//  RDNA4FB
 //
-//  See IpDiscovery.hpp for scope and the ROM this was validated against.
+//  See ipdiscovery.hpp for scope and the ROM this was validated against.
 //
 
-#include "IpDiscovery.hpp"
+#include "ipdiscovery.hpp"
 
 // binary_header (discovery.h): u32 signature, u16 version_major,
 // u16 version_minor, u16 binary_checksum, u16 binary_size, then the

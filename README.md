@@ -1,14 +1,17 @@
-# RX9070XT.kext
+# RDNA4FB.kext
 
-A **non-accelerated framebuffer driver** for the AMD Radeon **RX 9070 XT**
-(Navi 48 / RDNA 4, PCI `0x1002:0x7550`) on x86_64 Hackintosh, built as a
-standalone IOKit kext against MacKernelSDK. Cross-compiles on Apple Silicon.
+A **display driver** for the AMD Radeon **RX 9070 XT** (Navi 48 / RDNA 4,
+PCI `0x1002:0x7550`) on x86_64 Hackintosh, built as a standalone IOKit kext
+against MacKernelSDK. Cross-compiles on Apple Silicon. No 3D/Metal
+acceleration (yet — see Scope below); rendering is software.
 
 **Status: working.** Verified on real hardware (Ryzen 9 5950X, Big Sur
-11.7.10): boots to a 4K desktop with correct colors, WindowServer composites
-on this framebuffer, and BAR5 register MMIO (read *and* write) is proven.
-Known v0 limitations: software cursor lags under load, and only the boot
-display lights up (single adopted scanout).
+11.7.10): boots to a 4K desktop with correct colors, real display identity
+via EDID (DP over AUX, HDMI over the DDC I2C engine), working display sleep
+(DP stream + sink DPCD power), and proven BAR5 register MMIO. Hardware
+cursor and emulated VBL are implemented behind boot-args pending hardware
+verification. Remaining major limitation: only the boot display lights up
+(mode setting for additional pipes is in progress).
 
 > **Why not a Lilu plugin / OpenCore injection?** An `IOFramebuffer` subclass
 > must link against `com.apple.iokit.IOGraphicsFamily`, which on Big Sur+
@@ -21,19 +24,29 @@ display lights up (single adopted scanout).
 > boot-KC plugin if kernel patching becomes necessary.
 
 > **Scope, honestly.** macOS has *no* driver for RDNA 3 or RDNA 4 — Apple's AMD
-> support ends at RDNA 2 (Navi 2x). This kext does **not** add Metal or GPU
-> acceleration and cannot spoof the card as a supported one (the RDNA 2 driver
-> would emit command streams Navi 48 can't decode). What it does is adopt the
-> linear framebuffer that OpenCore's GOP already programmed and present it to
-> macOS as one fixed display mode, so WindowServer composites the desktop **in
-> software**. Think Linux `efifb`/`simpledrm`, not `amdgpu`. Goal: reach a
-> usable desktop, not fast graphics.
+> support ends at RDNA 2 (Navi 2x), and spoofing is impossible (the RDNA 2
+> driver would emit command streams Navi 48 can't decode). This project
+> **started** as pure framebuffer adoption — take the scanout OpenCore's GOP
+> already programmed and hand it to WindowServer, Linux `efifb`/`simpledrm`
+> style. It has outgrown that description: the driver now actively operates
+> the display controller — AUX and DDC-I2C engines for EDID, DPCD sink power
+> and stream blanking for display sleep, the cursor plane, discovery-derived
+> register addressing — all ported piecewise from `amdgpu`'s display core
+> (DC), which is this project's reference and upstream in spirit. Think of it
+> as an early, hand-rolled KMS driver growing toward native mode setting.
+> **What it still is not:** a GPU accelerator. 3D/Metal needs the GFX12
+> command processor, ring buffers, memory management and a Metal userland —
+> a much larger project, acknowledged as the long-term goal rather than
+> disclaimed. Much of the groundwork here (IP-discovery-driven registers,
+> AtomBIOS/EDID/timing parsers with host-side tests) is deliberately
+> ASIC-portable and would carry over to other RDNA 4 cards with little more
+> than wider PCI matching.
 
 ## How it works
 
 macOS's `IOPlatformExpert::getConsoleInfo()` returns `PE_state.video` — the base
 address, stride, width, height and depth of the framebuffer the bootloader set
-up. `RX9070XTFB` is an `IOFramebuffer` subclass that:
+up. `RDNA4FB` is an `IOFramebuffer` subclass that:
 
 1. Matches the RX 9070 XT PCI device (`IOPCIPrimaryMatch 0x75501002`).
 2. Reads the console framebuffer geometry in `start()` / `enableController()`.
@@ -46,8 +59,10 @@ up. `RX9070XTFB` is an `IOFramebuffer` subclass that:
    whole time.
 3. Exposes exactly **one** 32bpp display mode at that geometry.
 4. Returns that physical range from `getApertureRange()` so IOGraphics maps it
-   for scanout. Scanout/link registers are never reprogrammed; no DMA is
-   issued. BAR5 MMIO is used for read-mostly diagnostics (see boot-args).
+   for scanout. The scanout surface and link training are never reprogrammed
+   and no DMA is issued; BAR5 MMIO drives the narrow, restorable state the
+   driver does own: AUX/DC_I2C transactions (EDID), the DP stream enable and
+   sink DPCD power for display sleep, and the cursor plane (opt-in).
 
 At startup the kext also parses the VBIOS (AtomBIOS tables + AMD IP discovery
 binary) and publishes the results as registry properties (`AtomBIOS,*`,
@@ -60,33 +75,35 @@ All parsed without a leading dash (`name=1`, not `-name=1`):
 
 | Boot-arg | Effect |
 |----------|--------|
-| `rx9070xt-off=1` | Kill switch: `probe()` declines to match, restoring the macOS fallback framebuffer. Recovers from a bad build via OpenCore boot-args alone — no Safe Mode or filesystem surgery. |
-| `rx9070xt-cmap=N` | Diagnostic: permute the advertised R/G/B component masks (0–5). Note: WindowServer ignores these for 32-bit modes; kept for documentation of that finding. |
-| `rx9070xt-lutbypass=1` | Force the MPC MCM stages (shaper/3D LUT/1D LUT) to bypass on all pipes. |
-| `rx9070xt-8bpc=1` | Experiment: switch the active DP stream 10 bpc → 8 bpc and update the MSA to match (first proven live register write). |
-| `rx9070xt-noedid=1` | Skip the EDID-over-AUX probe (default on; verified on hardware 2026-07-11). Use if a sink misbehaves on DDC. |
-| `rx9070xt-nosleep=1` | Disable display sleep handling (power changes become no-ops again, screen stays on). Escape hatch if blank/unblank misbehaves. |
-| `rx9070xt-modedump=1` | Read-only survey of the mode-setting registers: all OTG timings/enables, DIG front/back-ends, HUBP surface addresses, DCCG clock muxes, DMUB status. The lit DP pipe is the template for HDMI pipe bring-up. |
-| `rx9070xt-hwcursor=1` | Enable the DCN hardware cursor plane (sprite in VRAM after the framebuffer, overlaid at scanout). Fixes software-cursor lag under heavy repaint. Opt-in until hardware-verified. |
-| `rx9070xt-curmode=N` | Cursor pixel mode when hwcursor is on: 2 = premultiplied ARGB (default), 1 = straight alpha. Flip to 1 if the pointer shows dark/bright fringes. |
-| `rx9070xt-vbl=1` | Provide an emulated vertical-blank interrupt (workloop timer at the EDID refresh rate). Engages IOFramebuffer's frame pacing (CVDisplayLink timestamps, deferred cursor sync) that is otherwise absent without a hardware IRQ handler. |
+| `rdna4-off=1` | Kill switch: `probe()` declines to match, restoring the macOS fallback framebuffer. Recovers from a bad build via OpenCore boot-args alone — no Safe Mode or filesystem surgery. |
+| `rdna4-cmap=N` | Diagnostic: permute the advertised R/G/B component masks (0–5). Note: WindowServer ignores these for 32-bit modes; kept for documentation of that finding. |
+| `rdna4-lutbypass=1` | Force the MPC MCM stages (shaper/3D LUT/1D LUT) to bypass on all pipes. |
+| `rdna4-8bpc=1` | Experiment: switch the active DP stream 10 bpc → 8 bpc and update the MSA to match (first proven live register write). |
+| `rdna4-noedid=1` | Skip the EDID-over-AUX probe (default on; verified on hardware 2026-07-11). Use if a sink misbehaves on DDC. |
+| `rdna4-nosleep=1` | Disable display sleep handling (power changes become no-ops again, screen stays on). Escape hatch if blank/unblank misbehaves. |
+| `rdna4-modedump=1` | Read-only survey of the mode-setting registers: all OTG timings/enables, DIG front/back-ends, HUBP surface addresses, DCCG clock muxes, DMUB status. The lit DP pipe is the template for HDMI pipe bring-up. |
+| `rdna4-hwcursor=1` | Enable the DCN hardware cursor plane (sprite in VRAM after the framebuffer, overlaid at scanout). Fixes software-cursor lag under heavy repaint. Opt-in until hardware-verified. |
+| `rdna4-curmode=N` | Cursor pixel mode when hwcursor is on: 2 = premultiplied ARGB (default), 1 = straight alpha. Flip to 1 if the pointer shows dark/bright fringes. |
+| `rdna4-vbl=1` | Provide an emulated vertical-blank interrupt (workloop timer at the EDID refresh rate). Engages IOFramebuffer's frame pacing (CVDisplayLink timestamps, deferred cursor sync) that is otherwise absent without a hardware IRQ handler. |
 
 ## Files
 
 | File | Purpose |
 |------|---------|
-| `Source/RX9070XTFB.{hpp,cpp}` | The `IOFramebuffer` subclass (the part that reaches the desktop). |
-| `Source/AtomBios.{hpp,cpp}` | Freestanding, bounds-checked AtomBIOS data-table parser (groundwork for native mode setting). |
-| `Source/IpDiscovery.{hpp,cpp}` | Parser for AMD's IP discovery binary — per-card IP versions and register segment bases (what amdgpu uses instead of hardcoded offsets). |
-| `Source/kmod_info.c` | Hand-written kmod glue (Xcode normally generates this). |
-| `tools/atomdump.cpp` | Host harness: runs the kext's parser against the real ROM (`make test`). |
+| `src/framebuffer.{hpp,cpp}` | The `IOFramebuffer` subclass (`RDNA4FB`): scanout adoption, AUX/DC_I2C engines, EDID/DDC service, display power, HW cursor, VBL. |
+| `src/atombios.{hpp,cpp}` | Freestanding, bounds-checked AtomBIOS parser: data tables (connectors, GPIO LUT, firmwareinfo) + command-function directory. |
+| `src/ipdiscovery.{hpp,cpp}` | Parser for AMD's IP discovery binary — per-card IP versions and register segment bases (what amdgpu uses instead of hardcoded offsets; the key to ASIC portability). |
+| `src/edid.{hpp,cpp}` | EDID detailed-timing and CTA-861 extension parsers (sink timings and capabilities). |
+| `src/otgtiming.{hpp,cpp}` | EDID timing → DCN OTG register images, per amdgpu's `optc1_program_timing` (mode-set groundwork). |
+| `src/kmod_info.c` | Hand-written kmod glue (Xcode normally generates this). |
+| `tools/atomdump.cpp` | Host test harness: runs the parsers against the real ROM and captured EDID fixtures (`make test`). |
 | `Info.plist` | PCI framebuffer personality (`IOPCIPrimaryMatch 0x75501002`). |
 | `Makefile` | Cross-compiles x86_64 on any host, assembles the `.kext`. |
 
 ## Building (works on Apple Silicon)
 
 ```sh
-make            # -> build/RX9070XT.kext  (x86_64, min macOS 11)
+make            # -> build/RDNA4FB.kext  (x86_64, min macOS 11)
 make test       # build host-side atomdump, verify the AtomBIOS parser
                 # against firmware/Sapphire.RX9070XT.16384.241213.rom
 make clean
@@ -95,23 +112,30 @@ make clean
 Verify the output:
 
 ```sh
-file build/RX9070XT.kext/Contents/MacOS/RX9070XT   # Mach-O 64-bit kext bundle x86_64
+file build/RDNA4FB.kext/Contents/MacOS/RDNA4FB   # Mach-O 64-bit kext bundle x86_64
 ```
 
 ## Installing (on the Intel target)
 
-1. **Do not add RX9070XT.kext to OpenCore `Kernel → Add`** — injection cannot
+1. **Do not add RDNA4FB.kext to OpenCore `Kernel → Add`** — injection cannot
    work (see box above). Instead, on the running system (same commands to
    update an existing install; remove the old bundle first):
 
    ```sh
-   sudo rm -rf /Library/Extensions/RX9070XT.kext
-   sudo cp -R build/RX9070XT.kext /Library/Extensions/
-   sudo chown -R root:wheel /Library/Extensions/RX9070XT.kext
-   sudo chmod -R 755 /Library/Extensions/RX9070XT.kext
+   sudo rm -rf /Library/Extensions/RDNA4FB.kext
+   sudo rm -rf /Library/Extensions/RX9070XT.kext   # pre-rename installs (≤2026-07)
+   sudo cp -R build/RDNA4FB.kext /Library/Extensions/
+   sudo chown -R root:wheel /Library/Extensions/RDNA4FB.kext
+   sudo chmod -R 755 /Library/Extensions/RDNA4FB.kext
    sudo kmutil install --volume-root / --update-all
    sudo reboot
    ```
+
+   **Renamed 2026-07:** the bundle was `RX9070XT.kext` and the boot-args
+   were `rx9070xt-*`. The old bundle *must* be removed (two copies would
+   race for the same PCI device), and old `rx9070xt-*` boot-args in the
+   OpenCore config are inert against the new build — including the old kill
+   switch; the working one is now `rdna4-off=1`.
 
    SIP must permit unsigned kexts (`csr-active-config` with
    `CSR_ALLOW_UNTRUSTED_KEXTS`; standard hackintosh values like `0x03000067`
@@ -126,7 +150,7 @@ file build/RX9070XT.kext/Contents/MacOS/RX9070XT   # Mach-O 64-bit kext bundle x
 3. Recommended while bringing this up: `-v keepsyms=1` boot-args, and disable
    other GPU-related kexts (WhateverGreen) so nothing fights over the device.
 
-**Recovery:** if a build misbehaves, add `rx9070xt-off=1` to boot-args — the
+**Recovery:** if a build misbehaves, add `rdna4-off=1` to boot-args — the
 kext declines to match and macOS falls back to its EFI framebuffer. Worst
 case (kext wedges boot before the kill switch existed): boot Safe Mode (`-x`),
 which skips the Aux KC entirely, then remove the bundle and rebuild the KC.
@@ -157,7 +181,7 @@ hardware; the `.rom` (NAVI48.bin AtomBIOS) in `../firmware` and the Linux
    DCN 3.1+ moved that work to DMUB firmware mailbox commands. So the
    PHY/PLL step needs either the DMUB mailbox (if the GOP left DMUB
    running) or register-level reverse engineering from lit-vs-dormant pipe
-   diffs (`rx9070xt-modedump=1`). OTG timing and DIG encoder registers are
+   diffs (`rdna4-modedump=1`). OTG timing and DIG encoder registers are
    directly programmable either way.
 4. ~~**Display power management**~~ — **done** (verified on hardware
    2026-07-11). The driver registers sleep/doze/wake power states with PM
@@ -171,7 +195,7 @@ hardware; the `.rom` (NAVI48.bin AtomBIOS) in `../firmware` and the Linux
    Apple's `IOBootNDRV`): after GPU power loss we cannot reprogram the
    display pipe until native mode setting exists, so allowing it would mean
    waking to a black screen. Opt out of display sleep handling with
-   `rx9070xt-nosleep=1`.
+   `rdna4-nosleep=1`.
 5. **Power / clocks** — SMU firmware handshake so the card is stable, not
    stuck at boot clocks.
 6. **Acceleration (huge)** — a real accelerator: GFX12 command processor, ring
@@ -195,7 +219,7 @@ hardware; the `.rom` (NAVI48.bin AtomBIOS) in `../firmware` and the Linux
       segment bases extracted from the ROM (`make test` gates on them)
 - [x] BAR5 register MMIO confirmed on hardware, read (VRAM size, DCN dumps)
       and write (DP stream registers, MCM bypass)
-- [x] Kill-switch boot-arg (`rx9070xt-off=1`) for safe iteration
+- [x] Kill-switch boot-arg (`rdna4-off=1`) for safe iteration
 - [x] DP AUX software engine + EDID read over I2C-over-AUX (verified on
       hardware: Samsung 4K sink on AUX0), served via `getDDCBlock()`
 - [x] HDMI/DVI EDID over the DC_I2C hardware engine (verified on hardware:
@@ -206,6 +230,6 @@ hardware; the `.rom` (NAVI48.bin AtomBIOS) in `../firmware` and the Linux
       AUX on sleep, D0 + stream re-enable on wake (system sleep vetoed until
       mode setting exists)
 - [ ] Hardware cursor via the DCN cursor plane (implemented behind
-      `rx9070xt-hwcursor=1`; needs hardware verification)
+      `rdna4-hwcursor=1`; needs hardware verification)
 - [ ] Native mode setting (DCN 4.1.0) / multiple displays
 - [ ] Acceleration / Metal

@@ -1,6 +1,6 @@
 //
-//  AtomBios.hpp
-//  RX9070XT
+//  atombios.hpp
+//  RDNA4FB
 //
 //  Minimal, bounds-checked AtomBIOS (atomfirmware-era) parser for the data
 //  tables needed to eventually drive Navi 48's DCN display engine.

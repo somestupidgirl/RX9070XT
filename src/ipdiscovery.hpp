@@ -1,6 +1,6 @@
 //
-//  IpDiscovery.hpp
-//  RX9070XT
+//  ipdiscovery.hpp
+//  RDNA4FB
 //
 //  Parser for AMD's IP discovery binary — the authoritative per-card list of
 //  IP blocks, their versions, and their register base addresses. Modern

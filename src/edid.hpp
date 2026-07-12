@@ -1,6 +1,6 @@
 //
-//  Edid.hpp
-//  RX9070XT
+//  edid.hpp
+//  RDNA4FB
 //
 //  Freestanding EDID detailed-timing-descriptor (DTD) parser. A DTD carries
 //  everything the OTG timing generator needs to be programmed with (totals,

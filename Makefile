@@ -1,14 +1,14 @@
-# Makefile — cross-compile the RX9070XT kext for x86_64 (Intel hackintosh)
+# Makefile — cross-compile the RDNA4FB kext for x86_64 (Intel hackintosh)
 # from any host, including Apple Silicon. Targets macOS 11 (Big Sur) ABI.
 #
-#   make            build RX9070XT.kext
+#   make            build RDNA4FB.kext
 #   make clean      remove build products
 #
 # The kext links against Lilu at load time (OSBundleLibraries); Lilu symbols
 # are left undefined in the -kext bundle and resolved by the kernel loader.
 
-PRODUCT      := RX9070XT
-BUNDLE_ID    := com.hackintosh.RX9070XT
+PRODUCT      := RDNA4FB
+BUNDLE_ID    := com.hackintosh.RDNA4FB
 VERSION      := 0.0.1
 
 ARCH         := x86_64
@@ -27,14 +27,14 @@ CC           := clang
 
 # --- sources -----------------------------------------------------------------
 CXX_SRCS := \
-	Source/RX9070XTFB.cpp \
-	Source/AtomBios.cpp \
-	Source/IpDiscovery.cpp \
-	Source/Edid.cpp \
-	Source/OtgTiming.cpp
+	src/framebuffer.cpp \
+	src/atombios.cpp \
+	src/ipdiscovery.cpp \
+	src/edid.cpp \
+	src/otgtiming.cpp
 
 C_SRCS := \
-	Source/kmod_info.c
+	src/kmod_info.c
 
 OBJS := $(patsubst %.cpp,$(BUILD)/%.o,$(CXX_SRCS)) \
         $(patsubst %.c,$(BUILD)/%.o,$(C_SRCS))
@@ -73,9 +73,9 @@ FIRMWARE := firmware/Sapphire.RX9070XT.16384.241213.rom
 .PHONY: all clean test
 all: $(KEXT)
 
-$(ATOMDUMP): tools/atomdump.cpp Source/AtomBios.cpp Source/AtomBios.hpp Source/IpDiscovery.cpp Source/IpDiscovery.hpp Source/Edid.cpp Source/Edid.hpp Source/OtgTiming.cpp Source/OtgTiming.hpp
+$(ATOMDUMP): tools/atomdump.cpp src/atombios.cpp src/atombios.hpp src/ipdiscovery.cpp src/ipdiscovery.hpp src/edid.cpp src/edid.hpp src/otgtiming.cpp src/otgtiming.hpp
 	@mkdir -p $(BUILD)
-	$(CXX) -std=c++17 -Wall -O2 -o $@ tools/atomdump.cpp Source/AtomBios.cpp Source/IpDiscovery.cpp Source/Edid.cpp Source/OtgTiming.cpp
+	$(CXX) -std=c++17 -Wall -O2 -o $@ tools/atomdump.cpp src/atombios.cpp src/ipdiscovery.cpp src/edid.cpp src/otgtiming.cpp
 
 atomdump: $(ATOMDUMP)
 
@@ -94,7 +94,7 @@ $(BUILD)/%.o: %.c
 
 # Ensure kmod_info.o is linked in the required position: user objects,
 # then -lkmodc++, then kmod_info.o, then -lkmod.
-KMOD_OBJ := $(BUILD)/Source/kmod_info.o
+KMOD_OBJ := $(BUILD)/src/kmod_info.o
 USER_OBJS := $(filter-out $(KMOD_OBJ),$(OBJS))
 
 $(EXEC): $(OBJS)

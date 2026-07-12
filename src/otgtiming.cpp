@@ -1,12 +1,12 @@
 //
-//  OtgTiming.cpp
-//  RX9070XT
+//  otgtiming.cpp
+//  RDNA4FB
 //
 //  Mirrors drivers/gpu/drm/amd/display/dc/optc/dcn10/dcn10_optc.c
 //  optc1_program_timing (borders are zero for EDID DTDs).
 //
 
-#include "OtgTiming.hpp"
+#include "otgtiming.hpp"
 
 namespace OtgTiming {
 

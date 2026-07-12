@@ -1,9 +1,9 @@
 //
 //  atomdump.cpp
-//  RX9070XT
+//  RDNA4FB
 //
 //  Host-side harness for the kext's AtomBios parser. Compiles the exact same
-//  Source/AtomBios.cpp the kext uses and runs it against a ROM dump, so the
+//  src/atombios.cpp the kext uses and runs it against a ROM dump, so the
 //  parsing logic is verified on the developer machine without GPU hardware.
 //
 //    make atomdump
@@ -13,10 +13,10 @@
 //  so `make test` can gate on it.
 //
 
-#include "../Source/AtomBios.hpp"
-#include "../Source/IpDiscovery.hpp"
-#include "../Source/Edid.hpp"
-#include "../Source/OtgTiming.hpp"
+#include "../src/atombios.hpp"
+#include "../src/ipdiscovery.hpp"
+#include "../src/edid.hpp"
+#include "../src/otgtiming.hpp"
 
 #include <cstdio>
 #include <cstdlib>
@@ -94,7 +94,7 @@ static int testEdidParser() {
 	}
 
 	// OTG register images per optc1_program_timing. These exact raw values
-	// must appear in the OTG0 line of a rx9070xt-modedump log (the GOP
+	// must appear in the OTG0 line of a rdna4-modedump log (the GOP
 	// programmed the same timing) — hardware validation of the math before
 	// any OTG is written by us.
 	OtgTiming::Regs r {};

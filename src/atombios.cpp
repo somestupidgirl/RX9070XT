@@ -1,12 +1,12 @@
 //
-//  AtomBios.cpp
-//  RX9070XT
+//  atombios.cpp
+//  RDNA4FB
 //
-//  Freestanding AtomBIOS parser — see AtomBios.hpp for scope and the ROM the
+//  Freestanding AtomBIOS parser — see atombios.hpp for scope and the ROM the
 //  layout was validated against.
 //
 
-#include "AtomBios.hpp"
+#include "atombios.hpp"
 
 // Offsets within the legacy VBIOS image (validated against the Navi 48 ROM).
 // Image signature 0x55 0xAA sits at offset 0x00.
