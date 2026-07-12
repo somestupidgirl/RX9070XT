@@ -964,6 +964,155 @@ void RX9070XTFB::setDisplayPower(bool on) {
 	displayPowerOn = on;
 }
 
+// ---------------------------------------------------------------------------
+// Hardware cursor (DCN cursor plane, pipe 0)
+// ---------------------------------------------------------------------------
+
+namespace {
+// dcn_4_1_0_offset.h, all base_idx 2. HUBP-side CURSOR0_0 block plus the
+// DPP-side CM_CUR0 enable.
+constexpr uint32_t kCurControl  = 0x0679;
+constexpr uint32_t kCurAddr     = 0x067a;
+constexpr uint32_t kCurAddrHigh = 0x067b;
+constexpr uint32_t kCurSize     = 0x067c;
+constexpr uint32_t kCurPosition = 0x067d;
+constexpr uint32_t kCurHotSpot  = 0x067e;
+constexpr uint32_t kCmCur0Control = 0x0cf1;
+
+// Field layout (dcn_4_1_0_sh_mask.h): CURSOR_CONTROL enable bit0, MODE [9:8],
+// PITCH [17:16]; SIZE height [15:0] width [31:16]; POSITION y [14:0],
+// x starts at bit 15 (NOT 16 on this generation).
+constexpr uint32_t kCurModeShift  = 8;
+constexpr uint32_t kCurPitchShift = 16;
+constexpr uint32_t kCurXShift     = 15;
+// CM_CUR0_CURSOR0_CONTROL: CUR0_ENABLE bit0, CUR0_MODE [6:4].
+constexpr uint32_t kCur0ModeShift = 4;
+
+// HUBPREQ0 scanout address registers — anchor for the sprite's GPU address.
+constexpr uint32_t kHubpPrimaryAddr     = 0x060a;
+constexpr uint32_t kHubpPrimaryAddrHigh = 0x060b;
+
+constexpr uint32_t kCursorPixels = 128;               // fixed 128x128 slot
+constexpr uint32_t kCursorPitchCode = 1;              // 0=64,1=128,2=256 px
+constexpr uint32_t kCursorBytes  = kCursorPixels * kCursorPixels * 4;
+} // namespace
+
+bool RX9070XTFB::initHWCursor() {
+	if (!hwCursorRequested || !ipDiscovery.isValid() || !rmmio ||
+	    fbPhysBase == 0 || fbLength == 0)
+		return false;
+
+	uint32_t lo = regReadDmu(2, kHubpPrimaryAddr);
+	uint32_t hi = regReadDmu(2, kHubpPrimaryAddrHigh);
+	if (lo == 0xFFFFFFFF || (lo == 0 && hi == 0)) {
+		FBLOG("cursor: scanout MC address unreadable, staying with software cursor");
+		return false;
+	}
+	uint64_t scanoutMc = (static_cast<uint64_t>(hi & 0xffff) << 32) | lo;
+
+	// Sprite right after the framebuffer, 8 KiB aligned. The CPU sees VRAM
+	// through the BAR at the same linear offsets as the MC addresses, so the
+	// CPU-visible sprite address is fbPhysBase plus the identical delta.
+	cursorMcAddr = (scanoutMc + fbLength + 0x1FFFULL) & ~0x1FFFULL;
+	uint64_t delta = cursorMcAddr - scanoutMc;
+	// Stay well inside the 256 MiB non-ReBAR VRAM window.
+	if (delta + kCursorBytes > 192ULL * 1024 * 1024) {
+		FBLOG("cursor: sprite offset 0x%llx outside safe aperture window", delta);
+		return false;
+	}
+
+	IODeviceMemory *mem = IODeviceMemory::withRange(fbPhysBase + delta, kCursorBytes);
+	if (!mem)
+		return false;
+	cursorMap = mem->map();
+	mem->release();
+	if (!cursorMap) {
+		FBLOG("cursor: failed to map sprite VRAM");
+		return false;
+	}
+	cursorVram = reinterpret_cast<volatile uint32_t *>(cursorMap->getVirtualAddress());
+
+	cursorStage = static_cast<uint32_t *>(IOMalloc(kCursorBytes));
+	if (!cursorStage) {
+		cursorMap->release();
+		cursorMap = nullptr;
+		cursorVram = nullptr;
+		return false;
+	}
+
+	FBLOG("cursor: HW cursor armed: scanout MC 0x%llx, sprite MC 0x%llx "
+	      "(cpu 0x%llx), mode %u", scanoutMc, cursorMcAddr,
+	      fbPhysBase + delta, hwCursorMode);
+	hwCursorReady = true;
+	return true;
+}
+
+IOReturn RX9070XTFB::setCursorImage(void *cursorImage) {
+	if (!hwCursorReady)
+		return kIOReturnUnsupported;
+
+	IOHardwareCursorDescriptor desc {};
+	desc.majorVersion = kHardwareCursorDescriptorMajorVersion;
+	desc.minorVersion = kHardwareCursorDescriptorMinorVersion;
+	desc.height   = kCursorPixels;
+	desc.width    = kCursorPixels;
+	desc.bitDepth = 32;   // direct ARGB
+
+	IOHardwareCursorInfo info {};
+	info.majorVersion = kHardwareCursorInfoMajorVersion;
+	info.minorVersion = kHardwareCursorInfoMinorVersion;
+	info.hardwareCursorData = reinterpret_cast<UInt8 *>(cursorStage);
+
+	if (!convertCursorImage(cursorImage, &desc, &info))
+		return kIOReturnUnsupported;
+	uint32_t w = info.cursorWidth, h = info.cursorHeight;
+	if (w == 0 || h == 0 || w > kCursorPixels || h > kCursorPixels)
+		return kIOReturnUnsupported;
+
+	// Staging buffer is tightly packed (w*4); the VRAM slot has a fixed
+	// 128-pixel pitch. Clear the slot so stale pixels never show at edges.
+	for (uint32_t i = 0; i < kCursorPixels * kCursorPixels; i++)
+		cursorVram[i] = 0;
+	for (uint32_t row = 0; row < h; row++)
+		for (uint32_t col = 0; col < w; col++)
+			cursorVram[row * kCursorPixels + col] = cursorStage[row * w + col];
+
+	regWriteDmu(2, kCurAddrHigh, static_cast<uint32_t>(cursorMcAddr >> 32) & 0xffff);
+	regWriteDmu(2, kCurAddr, static_cast<uint32_t>(cursorMcAddr));
+	regWriteDmu(2, kCurSize, h | (w << 16));
+	// setCursorState receives hotspot-adjusted top-left coords, so the
+	// hardware hotspot stays zero.
+	regWriteDmu(2, kCurHotSpot, 0);
+	regWriteDmu(2, kCurControl,
+	            (kCursorPitchCode << kCurPitchShift) |
+	            (hwCursorMode << kCurModeShift) |
+	            (hwCursorVisible ? 1u : 0u));
+	regWriteDmu(2, kCmCur0Control,
+	            (hwCursorMode << kCur0ModeShift) | (hwCursorVisible ? 1u : 0u));
+	return kIOReturnSuccess;
+}
+
+IOReturn RX9070XTFB::setCursorState(SInt32 x, SInt32 y, bool visible) {
+	if (!hwCursorReady)
+		return kIOReturnUnsupported;
+
+	// Signed coords can go negative when the pointer overlaps the top/left
+	// edge; clamp (v1 accepts the sprite pinning at the edge there).
+	if (x < 0) x = 0;
+	if (y < 0) y = 0;
+	regWriteDmu(2, kCurPosition,
+	            (static_cast<uint32_t>(y) & 0x7fff) |
+	            (static_cast<uint32_t>(x) << kCurXShift));
+	regWriteDmu(2, kCurControl,
+	            (kCursorPitchCode << kCurPitchShift) |
+	            (hwCursorMode << kCurModeShift) |
+	            (visible ? 1u : 0u));
+	regWriteDmu(2, kCmCur0Control,
+	            (hwCursorMode << kCur0ModeShift) | (visible ? 1u : 0u));
+	hwCursorVisible = visible;
+	return kIOReturnSuccess;
+}
+
 void RX9070XTFB::initForPM() {
 	if (pmRegistered)
 		return;
@@ -1123,6 +1272,14 @@ bool RX9070XTFB::start(IOService *provider) {
 		FBLOG("start: display sleep disabled by rx9070xt-nosleep");
 	}
 
+	uint32_t hwcur = 0;
+	if (PE_parse_boot_argn("rx9070xt-hwcursor", &hwcur, sizeof(hwcur)) && hwcur != 0) {
+		hwCursorRequested = true;
+		uint32_t cmode = 0;
+		if (PE_parse_boot_argn("rx9070xt-curmode", &cmode, sizeof(cmode)) && cmode <= 3)
+			hwCursorMode = cmode;
+	}
+
 	// Grab the bootloader-provided framebuffer before anything else touches it.
 	if (!captureConsoleInfo()) {
 		FBLOG("start: could not capture console framebuffer, aborting");
@@ -1145,6 +1302,7 @@ bool RX9070XTFB::start(IOService *provider) {
 		tryForce8bpc();
 		probeEDID();
 		dumpModeState();
+		initHWCursor();
 	}
 
 	if (!super::start(provider)) {
@@ -1158,6 +1316,16 @@ bool RX9070XTFB::start(IOService *provider) {
 
 void RX9070XTFB::stop(IOService *provider) {
 	FBLOG("stop");
+	hwCursorReady = false;
+	if (cursorStage) {
+		IOFree(cursorStage, kCursorBytes);
+		cursorStage = nullptr;
+	}
+	if (cursorMap) {
+		cursorMap->release();
+		cursorMap = nullptr;
+		cursorVram = nullptr;
+	}
 	unmapRegisters();
 	freeVBIOS();
 	super::stop(provider);
@@ -1325,8 +1493,9 @@ IOReturn RX9070XTFB::setDisplayMode(IODisplayModeID displayMode, IOIndex depth) 
 IOReturn RX9070XTFB::getAttribute(IOSelect attribute, uintptr_t *value) {
 	switch (attribute) {
 		case kIOHardwareCursorAttribute:
-			// No hardware cursor: force IOGraphics to use a software cursor.
-			if (value) *value = 0;
+			// Report the DCN cursor plane when armed; otherwise force the
+			// software cursor.
+			if (value) *value = hwCursorReady ? 1 : 0;
 			return kIOReturnSuccess;
 		default:
 			return super::getAttribute(attribute, value);

@@ -178,6 +178,26 @@ class RX9070XTFB : public IOFramebuffer {
 	void initForPM();
 	bool pmRegistered { false };
 
+	// Hardware cursor (the DCN cursor plane on the boot pipe). The sprite is
+	// overlaid during scanout, so cursor moves cost two register writes and
+	// stay smooth regardless of compositing load — the fix for the laggy
+	// software cursor under heavy repaint (Chrome). The sprite lives in VRAM
+	// directly after the GOP framebuffer; its GPU address comes from the
+	// scanout address in HUBPREQ0 plus the same delta applied to the CPU
+	// aperture. Opt-in via rx9070xt-hwcursor=1 until hardware-verified.
+	bool initHWCursor();
+	bool hwCursorRequested { false };
+	bool hwCursorReady     { false };
+	bool hwCursorVisible   { false };
+	// CURSOR_MODE: 2 = premultiplied ARGB (default), 1 = straight alpha.
+	// If the pointer renders with dark/bright fringes, flip with
+	// rx9070xt-curmode=1.
+	uint32_t hwCursorMode  { 2 };
+	IOMemoryMap       *cursorMap  { nullptr };
+	volatile uint32_t *cursorVram { nullptr };
+	uint32_t *cursorStage { nullptr };  // convertCursorImage staging buffer
+	uint64_t  cursorMcAddr { 0 };       // GPU (MC) address of the sprite
+
 public:
 	// IOService
 	IOService *probe(IOService *provider, SInt32 *score) override;
@@ -224,6 +244,10 @@ public:
 	IOReturn getDDCBlock(IOIndex connectIndex, UInt32 blockNumber,
 	                     IOSelect blockType, IOOptionBits options,
 	                     UInt8 *data, IOByteCount *length) override;
+
+	// IOFramebuffer — hardware cursor
+	IOReturn setCursorImage(void *cursorImage) override;
+	IOReturn setCursorState(SInt32 x, SInt32 y, bool visible) override;
 
 	// Report that this framebuffer's console is already usable so IOGraphics
 	// does not attempt to reprogram hardware we cannot drive.

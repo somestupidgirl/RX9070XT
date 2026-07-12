@@ -66,7 +66,9 @@ All parsed without a leading dash (`name=1`, not `-name=1`):
 | `rx9070xt-8bpc=1` | Experiment: switch the active DP stream 10 bpc → 8 bpc and update the MSA to match (first proven live register write). |
 | `rx9070xt-noedid=1` | Skip the EDID-over-AUX probe (default on; verified on hardware 2026-07-11). Use if a sink misbehaves on DDC. |
 | `rx9070xt-nosleep=1` | Disable display sleep handling (power changes become no-ops again, screen stays on). Escape hatch if blank/unblank misbehaves. |
-| `rx9070xt-modedump=1` | Read-only survey of the mode-setting registers: all OTG timings/enables, DIG front/back-ends, HUBP surface addresses, DCCG clock muxes. The lit DP pipe is the template for HDMI pipe bring-up. |
+| `rx9070xt-modedump=1` | Read-only survey of the mode-setting registers: all OTG timings/enables, DIG front/back-ends, HUBP surface addresses, DCCG clock muxes, DMUB status. The lit DP pipe is the template for HDMI pipe bring-up. |
+| `rx9070xt-hwcursor=1` | Enable the DCN hardware cursor plane (sprite in VRAM after the framebuffer, overlaid at scanout). Fixes software-cursor lag under heavy repaint. Opt-in until hardware-verified. |
+| `rx9070xt-curmode=N` | Cursor pixel mode when hwcursor is on: 2 = premultiplied ARGB (default), 1 = straight alpha. Flip to 1 if the pointer shows dark/bright fringes. |
 
 ## Files
 
@@ -202,5 +204,7 @@ hardware; the `.rom` (NAVI48.bin AtomBIOS) in `../firmware` and the Linux
 - [x] Display sleep verified on hardware: stream blank + sink D3 over native
       AUX on sleep, D0 + stream re-enable on wake (system sleep vetoed until
       mode setting exists)
+- [ ] Hardware cursor via the DCN cursor plane (implemented behind
+      `rx9070xt-hwcursor=1`; needs hardware verification)
 - [ ] Native mode setting (DCN 4.1.0) / multiple displays
 - [ ] Acceleration / Metal
