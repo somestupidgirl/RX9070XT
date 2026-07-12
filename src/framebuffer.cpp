@@ -1071,9 +1071,15 @@ constexpr uint32_t kCurFpScaleOne       = 0x3c00;  // FP16 1.0
 constexpr uint32_t kCurSettings = 0x0653;
 constexpr uint32_t kCurChunkHdlAdjust = 3u << 8;
 
-// Field layout (dcn_4_1_0_sh_mask.h): CURSOR_CONTROL enable bit0, MODE [9:8],
-// PITCH [17:16], LINES_PER_CHUNK [25:24]; SIZE height [15:0] width [31:16];
-// POSITION y [14:0], x starts at bit 15 (NOT 16 on this generation).
+// Field layout (dcn_4_1_0_sh_mask.h): CURSOR_CONTROL enable bit0, REQ_MODE
+// bit2, MODE [9:8], PITCH [17:16], LINES_PER_CHUNK [25:24]; SIZE height
+// [15:0] width [31:16]; POSITION y [14:0], x starts at bit 15 (NOT 16 on
+// this generation).
+// CURSOR_REQ_MODE=1 (fetch during display prefetch) is MANDATORY on DCN4x:
+// per dcn401_hubp.c, mode 0 (legacy fetch-just-in-time) "is no longer
+// supported" — with it the cursor simply never fetches (hardware-confirmed:
+// three rounds of perfect registers + verified sprite data, no pixels).
+constexpr uint32_t kCurReqMode    = 1u << 2;
 constexpr uint32_t kCurModeShift  = 8;
 constexpr uint32_t kCurPitchShift = 16;
 constexpr uint32_t kCurLpcShift   = 24;
@@ -1212,7 +1218,8 @@ IOReturn RDNA4FB::setCursorImage(void *cursorImage) {
 	regWriteDmu(2, kCurSettings, kCurChunkHdlAdjust);
 	cursorCtlBase = (cursorLinesPerChunk(w) << kCurLpcShift) |
 	                (kCursorPitchCode << kCurPitchShift) |
-	                (hwCursorMode << kCurModeShift);
+	                (hwCursorMode << kCurModeShift) |
+	                kCurReqMode;
 	regWriteDmu(2, kCurControl, cursorCtlBase | (hwCursorVisible ? 1u : 0u));
 	// The FP scale stage: without FP16 1.0 here the sprite is multiplied
 	// to invisibility (found on hardware 2026-07-12).
