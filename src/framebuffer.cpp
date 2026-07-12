@@ -922,103 +922,70 @@ void RDNA4FB::dmubPing() {
 	uint32_t on = 0;
 	if (!PE_parse_boot_argn("rdna4-dmubping", &on, sizeof(on)) || on == 0)
 		return;
-	if (!ipDiscovery.isValid() || !rmmio || fbPhysBase == 0) {
+	if (!ipDiscovery.isValid() || !rmmio) {
 		FBLOG("dmub: MMIO unavailable, skipping ping");
 		return;
 	}
 
-	// DMCUB registers (dcn_4_1_0_offset.h, base_idx 2).
-	constexpr uint32_t kInbox1Base = 0x01d4, kInbox1Size = 0x01d5;
-	constexpr uint32_t kInbox1Wptr = 0x01d6, kInbox1Rptr = 0x01d7;
-	constexpr uint32_t kCw0Base = 0x01a5, kCw0Top = 0x01ad;
-	constexpr uint32_t kCw0Off  = 0x01b5;  // pairs: OFFSET, OFFSET_HIGH
+	// DMCUB registers (dcn_4_1_0_offset.h, base_idx 2). The inbox1 ring
+	// lives in top-of-VRAM firmware memory outside the 256 MiB CPU aperture
+	// (REGION4 dump below), so use the REGISTER-based inbox0 instead:
+	// dwords 1..15 of the 64-byte command go to MSG0..MSG14, then writing
+	// the header dword (with is_reg_based=1) to RDY triggers the firmware;
+	// the response header lands in RSP (dmub_dcn401.c protocol).
+	constexpr uint32_t kHostIntCsr = 0x0222;
+	constexpr uint32_t kRegInbox0Rdy  = 0x0223;
+	constexpr uint32_t kRegInbox0Msg0 = 0x0224;   // ..MSG14 = 0x0232
+	constexpr uint32_t kRegInbox0Rsp  = 0x0233;
 
-	// Anchor for MC->CPU translation (normally set by initHWCursor, but the
-	// ping must work without the cursor armed).
-	if (scanoutMcAddr == 0) {
-		uint32_t lo = regReadDmu(2, 0x060a);
-		uint32_t hi = regReadDmu(2, 0x060b);
-		if (lo == 0xFFFFFFFF || (lo == 0 && hi == 0)) {
-			FBLOG("dmub: scanout MC unreadable, skipping ping");
-			return;
-		}
-		scanoutMcAddr = (static_cast<uint64_t>(hi & 0xffff) << 32) | lo;
-	}
-
-	uint32_t inboxBase = regReadDmu(2, kInbox1Base);
-	uint32_t inboxSize = regReadDmu(2, kInbox1Size);
-	uint32_t wptr = regReadDmu(2, kInbox1Wptr);
-	uint32_t rptr = regReadDmu(2, kInbox1Rptr);
-	if (inboxSize == 0 || inboxSize > 0x100000 || wptr != rptr) {
-		FBLOG("dmub: inbox not idle/sane (size=0x%x wptr=0x%x rptr=0x%x)",
-		      inboxSize, wptr, rptr);
-		return;
-	}
-
-	// The inbox base is a DMUB-address-space pointer; region windows CW0-7
-	// map DMUB space onto VRAM (MC). Find the covering window.
-	uint64_t ringMc = 0;
+	// Context dump: where the firmware's memory windows actually live.
+	// REGION3 CW top registers carry an enable bit (bit 31) + the window id
+	// in the top byte; mask to get the real DMUB-space top.
 	for (uint32_t i = 0; i < 8; i++) {
-		uint32_t cwBase = regReadDmu(2, kCw0Base + i);
-		uint32_t cwTop  = regReadDmu(2, kCw0Top + i);
-		uint64_t cwOff  = regReadDmu(2, kCw0Off + 2 * i) |
-		    (static_cast<uint64_t>(regReadDmu(2, kCw0Off + 2 * i + 1)) << 32);
-		if (cwBase || cwTop)
+		uint32_t cwBase = regReadDmu(2, 0x01a5 + i);
+		uint32_t cwTopRaw = regReadDmu(2, 0x01ad + i);
+		uint64_t cwOff = regReadDmu(2, 0x01b5 + 2 * i) |
+		    (static_cast<uint64_t>(regReadDmu(2, 0x01b6 + 2 * i)) << 32);
+		if (cwTopRaw & 0x80000000u)
 			FBLOG("dmub: cw%u dmub-space 0x%08x..0x%08x -> mc 0x%llx",
-			      i, cwBase, cwTop, cwOff);
-		if (cwBase && inboxBase >= cwBase && inboxBase <= cwTop && ringMc == 0)
-			ringMc = cwOff + (inboxBase - cwBase);
+			      i, cwBase, cwTopRaw & 0x0fffffffu, cwOff);
 	}
-	if (ringMc == 0) {
-		FBLOG("dmub: no region window covers inbox 0x%08x", inboxBase);
-		return;
-	}
+	FBLOG("dmub: region4 (mailbox) mc 0x%llx top=0x%08x",
+	      regReadDmu(2, 0x0196) |
+	      (static_cast<uint64_t>(regReadDmu(2, 0x0197)) << 32),
+	      regReadDmu(2, 0x01a1));
 
-	// CPU access via the same MC->BAR delta as the framebuffer.
-	if (ringMc < scanoutMcAddr ||
-	    (ringMc - scanoutMcAddr) + inboxSize > 192ULL * 1024 * 1024) {
-		FBLOG("dmub: ring mc 0x%llx outside CPU-visible window", ringMc);
-		return;
-	}
-	IODeviceMemory *mem = IODeviceMemory::withRange(
-	    fbPhysBase + (ringMc - scanoutMcAddr), inboxSize);
-	if (!mem)
-		return;
-	IOMemoryMap *map = mem->map();
-	mem->release();
-	if (!map) {
-		FBLOG("dmub: failed to map inbox ring");
-		return;
-	}
-	volatile uint32_t *ring =
-	    reinterpret_cast<volatile uint32_t *>(map->getVirtualAddress());
+	uint32_t rsp0 = regReadDmu(2, kRegInbox0Rsp);
+	uint32_t csr0 = regReadDmu(2, kHostIntCsr);
 
-	// Compose one QUERY_FEATURE_CAPS (reply written into the entry by FW)
-	// at the write pointer and submit by advancing WPTR.
-	uint32_t entry = wptr / 4;   // dword index of our 64-byte slot
-	ring[entry] = Dmub::headerWord(Dmub::CmdQueryFeatureCaps, 0,
-	                               Dmub::kCmdSize - 4);
-	for (uint32_t i = 1; i < Dmub::kCmdSize / 4; i++)
-		ring[entry + i] = 0;
+	// QUERY_FEATURE_CAPS via reg inbox: zero payload registers, then the
+	// header write to RDY submits.
+	for (uint32_t i = 0; i < 15; i++)
+		regWriteDmu(2, kRegInbox0Msg0 + i, 0);
+	uint32_t hdr = Dmub::headerWord(Dmub::CmdQueryFeatureCaps, 0,
+	                                Dmub::kCmdSize - 4, /*regBased=*/true);
+	regWriteDmu(2, kRegInbox0Rdy, hdr);
 
-	uint32_t newWptr = (wptr + Dmub::kCmdSize) % inboxSize;
-	regWriteDmu(2, kInbox1Wptr, newWptr);
-
-	// FW normally consumes within microseconds; allow 200 ms.
-	uint32_t nrptr = rptr;
+	// Poll for the response header (RSP change or interrupt stat bit 12).
+	uint32_t rsp = rsp0, csr = csr0;
+	bool done = false;
 	for (int i = 0; i < 20000; i++) {
-		nrptr = regReadDmu(2, kInbox1Rptr);
-		if (nrptr == newWptr)
-			break;
+		rsp = regReadDmu(2, kRegInbox0Rsp);
+		csr = regReadDmu(2, kHostIntCsr);
+		if (rsp != rsp0 || ((csr >> 12) & 1)) { done = true; break; }
 		IODelay(10);
 	}
-	if (nrptr == newWptr)
-		FBLOG("dmub: PING OK — rptr advanced 0x%x -> 0x%x; caps: %08x %08x %08x",
-		      rptr, nrptr, ring[entry + 1], ring[entry + 2], ring[entry + 3]);
-	else
-		FBLOG("dmub: ping NOT consumed (wptr=0x%x rptr stuck at 0x%x)",
-		      newWptr, nrptr);
-	map->release();
+	if (done) {
+		FBLOG("dmub: PING OK — rsp 0x%08x (was 0x%08x) csr=0x%08x caps: %08x %08x %08x %08x",
+		      rsp, rsp0, csr,
+		      regReadDmu(2, kRegInbox0Msg0), regReadDmu(2, kRegInbox0Msg0 + 1),
+		      regReadDmu(2, kRegInbox0Msg0 + 2), regReadDmu(2, kRegInbox0Msg0 + 3));
+		// Ack the response interrupt (HOST_INTERRUPT_CSR bit 8).
+		regWriteDmu(2, kHostIntCsr, csr | (1u << 8));
+	} else {
+		FBLOG("dmub: ping NOT answered (rdy=0x%08x rsp=0x%08x csr 0x%08x->0x%08x)",
+		      hdr, rsp, csr0, csr);
+	}
 }
 
 void RDNA4FB::setDisplayPower(bool on) {

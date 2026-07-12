@@ -40,10 +40,11 @@ constexpr uint8_t VbiosEnableDispPowerGating  = 3;
 //   type[7:0] | sub_type[15:8] | ret_status[16] | multi_cmd_pending[17] |
 //   is_reg_based[18] | reserved[23:19] | payload_bytes[29:24] | rsvd[31:30]
 inline uint32_t headerWord(uint8_t type, uint8_t subType, uint8_t payloadBytes,
-                           bool multiPending = false) {
+                           bool regBased = false, bool multiPending = false) {
 	return static_cast<uint32_t>(type) |
 	       (static_cast<uint32_t>(subType) << 8) |
 	       (multiPending ? (1u << 17) : 0) |
+	       (regBased ? (1u << 18) : 0) |
 	       ((static_cast<uint32_t>(payloadBytes) & 0x3f) << 24);
 }
 
