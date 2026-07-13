@@ -1059,7 +1059,9 @@ void RDNA4FB::dmubCursorTest() {
 		Dmub::headerWord(Dmub::CmdUpdateCursorInfo, 0, 52, false, /*multi=*/true),
 		100, 100, 64, 64,          // cursor_rect x,y,w,h
 		0,                         // debug flags
-		0x00000001,                // enable=1, pipe 0, version 0, panel 0
+		0x00020001,                // enable=1, pipe 0, VERSION_2 (external
+		                           // monitor support — v0 makes the FW park
+		                           // the cursor, observed on hardware), panel 0
 		hubpCtl,
 		100u | (100u << 16),       // position: x [15:0], y [31:16] per DMUB
 		0,                         // hot spot
