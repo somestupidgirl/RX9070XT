@@ -1747,13 +1747,19 @@ IOService *RDNA4FB::probe(IOService *provider, SInt32 *score) {
 	}
 
 	uint32_t vendorDevice = pci->configRead32(kIOPCIConfigVendorID);
+	uint16_t device = static_cast<uint16_t>(vendorDevice >> 16);
 	FBLOG("probe on PCI device 0x%08x", vendorDevice);
 
-	// Vendor 0x1002 (AMD), device 0x7550 (Navi 48 / RX 9070 XT).
-	if (vendorDevice != 0x75501002) {
+	// Vendor 0x1002 (AMD), Navi 48 family: 0x7550 (RX 9070 / 9070 XT),
+	// 0x7551 (Radeon AI PRO R9700 — same die, compute bring-up proven on
+	// macOS by lemonade-sdk/mac-amdgpu). Same DCN 4.1.0 display core.
+	if ((vendorDevice & 0xffff) != 0x1002 ||
+	    (device != 0x7550 && device != 0x7551)) {
 		FBLOG("device id mismatch, not matching");
 		return nullptr;
 	}
+	FBLOG("Navi 48 variant: %s",
+	      device == 0x7550 ? "RX 9070 / 9070 XT" : "R9700");
 
 	if (score) *score += 20000;
 	return this;
@@ -1800,6 +1806,13 @@ bool RDNA4FB::start(IOService *provider) {
 	// Enable memory space so the aperture is reachable; do NOT enable bus
 	// mastering — we never issue DMA.
 	pciDevice->setMemoryEnable(true);
+
+	// Precise model on the PCI nub (System Report / ioreg diagnostics).
+	uint32_t vd = pciDevice->configRead32(kIOPCIConfigVendorID);
+	const char *model = (vd >> 16) == 0x7551 ? "AMD Radeon AI PRO R9700"
+	                                         : "AMD Radeon RX 9070 XT";
+	pciDevice->setProperty("model", model);
+	setProperty("GPU,Variant", model);
 
 	// Registers first: the on-die discovery fallback needs MMIO.
 	bool haveMmio = mapRegisters();

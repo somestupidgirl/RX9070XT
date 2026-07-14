@@ -48,7 +48,9 @@ macOS's `IOPlatformExpert::getConsoleInfo()` returns `PE_state.video` — the ba
 address, stride, width, height and depth of the framebuffer the bootloader set
 up. `RDNA4FB` is an `IOFramebuffer` subclass that:
 
-1. Matches the RX 9070 XT PCI device (`IOPCIPrimaryMatch 0x75501002`).
+1. Matches the Navi 48 family (`0x7550` RX 9070/9070 XT, `0x7551` R9700;
+   `GPU,Variant` in ioreg shows which). Navi 44 (RX 9060, `0x7590`) shares
+   DCN 4.1.0 and is a likely future addition once someone can test it.
 2. Reads the console framebuffer geometry in `start()` / `enableController()`.
    **Hard-won detail:** `v_baseAddr` carries flag bits in its low bits (this
    machine reads `0x840000001`); they must be masked off. Passing the raw
@@ -100,7 +102,7 @@ All parsed without a leading dash (`name=1`, not `-name=1`):
 | `src/otgtiming.{hpp,cpp}` | EDID timing → DCN OTG register images, per amdgpu's `optc1_program_timing` (mode-set groundwork). |
 | `src/kmod_info.c` | Hand-written kmod glue (Xcode normally generates this). |
 | `tools/atomdump.cpp` | Host test harness: runs the parsers against the real ROM and captured EDID fixtures (`make test`). |
-| `Info.plist` | PCI framebuffer personality (`IOPCIPrimaryMatch 0x75501002`). |
+| `Info.plist` | PCI framebuffer personality (`IOPCIPrimaryMatch`: 0x7550 RX 9070/XT, 0x7551 R9700 — the Navi 48 family). |
 | `Makefile` | Cross-compiles x86_64 on any host, assembles the `.kext`. |
 
 ## Building (works on Apple Silicon)
