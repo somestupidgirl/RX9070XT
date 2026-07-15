@@ -1153,6 +1153,52 @@ void RDNA4FB::smuPing() {
 	setProperty("SMU,Verified", true);
 }
 
+// rdna4-dmubhist=1: read-only decode of the GOP's own DMUB command history.
+// The inbox1 ring still holds every command the GOP issued to bring up the
+// DP0 display (wptr bytes worth, 64 each), and the GOP does display bring-up
+// entirely through this ring (VBIOS-family commands). Decoding them yields
+// the exact, firmware-accepted mode-set recipe for THIS silicon — the
+// template to adapt for the HDMI pipe. Pure MM_INDEX reads; writes nothing.
+void RDNA4FB::dmubHistory() {
+	uint32_t on = 0;
+	if (!PE_parse_boot_argn("rdna4-dmubhist", &on, sizeof(on)) || on == 0)
+		return;
+	if (!ipDiscovery.isValid() || !rmmio)
+		return;
+
+	uint32_t wptr = regReadDmu(2, 0x01d6);
+	if (wptr == 0 || wptr > 0x2000 || (wptr % Dmub::kCmdSize) != 0) {
+		FBLOG("dmub-hist: wptr 0x%x not a sane command count", wptr);
+		return;
+	}
+	uint64_t region4Mc = regReadDmu(2, 0x0196) |
+	    (static_cast<uint64_t>(regReadDmu(2, 0x0197)) << 32);
+	uint64_t vramMcBase =
+	    static_cast<uint64_t>(regReadDmu(2, 0x0475) & 0xffffff) << 24;
+	if (region4Mc <= vramMcBase) {
+		FBLOG("dmub-hist: region4 mc below vram base");
+		return;
+	}
+	uint64_t ringBase = region4Mc - vramMcBase;
+	uint32_t count = wptr / Dmub::kCmdSize;
+	FBLOG("dmub-hist: decoding %u GOP commands from vram+0x%llx", count, ringBase);
+
+	for (uint32_t c = 0; c < count && c < 40; c++) {
+		uint64_t slot = ringBase + static_cast<uint64_t>(c) * Dmub::kCmdSize;
+		uint32_t hdr = vramRead32(slot);
+		uint8_t  type    = hdr & 0xff;
+		uint8_t  subType = (hdr >> 8) & 0xff;
+		uint8_t  payload = (hdr >> 24) & 0x3f;
+		uint32_t d1 = vramRead32(slot + 4),  d2 = vramRead32(slot + 8);
+		uint32_t d3 = vramRead32(slot + 12), d4 = vramRead32(slot + 16);
+		uint32_t d5 = vramRead32(slot + 20), d6 = vramRead32(slot + 24);
+		FBLOG("dmub-hist: [%02u] hdr=0x%08x %-30s pl=%u  %08x %08x %08x %08x %08x %08x",
+		      c, hdr, Dmub::cmdLabel(type, subType), payload,
+		      d1, d2, d3, d4, d5, d6);
+	}
+	FBLOG("dmub-hist: --- end (this is the DP0 bring-up recipe to adapt for HDMI) ---");
+}
+
 void RDNA4FB::dmubPing() {
 	uint32_t on = 0;
 	if (!PE_parse_boot_argn("rdna4-dmubping", &on, sizeof(on)) || on == 0)
@@ -2001,6 +2047,7 @@ bool RDNA4FB::start(IOService *provider) {
 		probeEDID();
 		dumpModeState();
 		initHWCursor();
+		dmubHistory();
 		dmubPing();
 		dmubCursorTest();
 		smuPing();

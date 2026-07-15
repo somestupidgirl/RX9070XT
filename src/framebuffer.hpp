@@ -151,6 +151,11 @@ class RDNA4FB : public IOFramebuffer {
 	// for transmitter control / pixel clock — the keystone of second-pipe
 	// mode setting — is drivable from this kext.
 	void dmubPing();
+	// Boot-arg "rdna4-dmubhist=1": read-only decode of the GOP's recorded
+	// DMUB command ring — the exact display-bring-up recipe the firmware
+	// accepted on this silicon, to adapt for the HDMI pipe. Runs before
+	// dmubPing so it captures the pristine GOP history.
+	void dmubHistory();
 	// Boot-arg "rdna4-smuping=1": read-only SMU (PMFW) mailbox handshake —
 	// TestMessage + firmware/interface version queries via the MP1 C2PMSG
 	// registers. No DPM changes; prerequisite check for the clocks/power

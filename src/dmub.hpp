@@ -36,6 +36,35 @@ constexpr uint8_t VbiosDigxEncoderControl     = 0;
 constexpr uint8_t VbiosDig1TransmitterControl = 1;
 constexpr uint8_t VbiosSetPixelClock          = 2;
 constexpr uint8_t VbiosEnableDispPowerGating  = 3;
+constexpr uint8_t VbiosLvtmaControl           = 15;
+constexpr uint8_t VbiosTransmitterQueryDpAlt  = 26;
+constexpr uint8_t VbiosDomainControl          = 28;
+constexpr uint8_t VbiosTransmitterSetPhyFsm   = 29;
+
+// Human-readable label for a command's (type, sub_type) — for decoding the
+// GOP's own recorded command ring. Covers the display-bring-up commands;
+// unknown ids fall through to the caller's numeric print.
+inline const char *cmdLabel(uint8_t type, uint8_t subType) {
+	if (type != CmdVbios) {
+		switch (type) {
+		case CmdNull:             return "NULL";
+		case CmdQueryFeatureCaps: return "QUERY_FEATURE_CAPS";
+		case CmdUpdateCursorInfo: return "UPDATE_CURSOR_INFO";
+		default:                  return "?";
+		}
+	}
+	switch (subType) {
+	case VbiosDigxEncoderControl:     return "VBIOS/DIGX_ENCODER_CONTROL";
+	case VbiosDig1TransmitterControl: return "VBIOS/DIG1_TRANSMITTER_CONTROL";
+	case VbiosSetPixelClock:          return "VBIOS/SET_PIXEL_CLOCK";
+	case VbiosEnableDispPowerGating:  return "VBIOS/ENABLE_DISP_POWER_GATING";
+	case VbiosLvtmaControl:           return "VBIOS/LVTMA_CONTROL";
+	case VbiosTransmitterQueryDpAlt:  return "VBIOS/TRANSMITTER_QUERY_DP_ALT";
+	case VbiosDomainControl:          return "VBIOS/DOMAIN_CONTROL";
+	case VbiosTransmitterSetPhyFsm:   return "VBIOS/TRANSMITTER_SET_PHY_FSM";
+	default:                          return "VBIOS/?";
+	}
+}
 
 // struct dmub_cmd_header, encoded manually to avoid bitfield ABI surprises:
 //   type[7:0] | sub_type[15:8] | ret_status[16] | multi_cmd_pending[17] |
