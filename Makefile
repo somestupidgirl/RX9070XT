@@ -52,7 +52,13 @@ COMMON_FLAGS := \
 	-fno-builtin -fno-common -fno-stack-protector -mkernel -fapple-kext \
 	-Wall -Os -g
 
-CXXFLAGS := $(COMMON_FLAGS) -std=c++17 -fno-exceptions -fno-rtti -fcheck-new
+# -fno-c++-static-destructors: at -Os clang can lower the gMetaClass static
+# object's destructor into an __cxa_atexit registration, which the kernel
+# does not export — kmutil then fails to link ("could not find a kext which
+# exports ___cxa_atexit"). Kext teardown is handled by the kmod _stop path,
+# so static destructors are never wanted here.
+CXXFLAGS := $(COMMON_FLAGS) -std=c++17 -fno-exceptions -fno-rtti -fcheck-new \
+            -fno-c++-static-destructors
 CFLAGS   := $(COMMON_FLAGS)
 
 LDFLAGS := \
