@@ -1233,8 +1233,44 @@ void RDNA4FB::dumpDmubVersion() {
 	    (static_cast<uint64_t>(regReadDmu(2, 0x0197)) << 32);
 	FBLOG("dmubver: cntl=0x%08x cntl2=0x%08x region4 mc=0x%llx",
 	      regReadDmu(2, 0x01f6), regReadDmu(2, 0x0200), region4Mc);
-	FBLOG("dmubver: compare against Debian `dmesg | grep -i dmub` (version=0x...) "
-	      "— a matching value in the scratch bank means mainline dialect");
+
+	// The scratch bank carries boot status, not the firmware version, so it
+	// can't answer the dialect question on its own. Escalate: dmub_fw_meta_info
+	// is embedded at the tail of the loaded firmware image (magic 0x444D5542
+	// "DMUB", then fw_region_size, trace_buffer_size, fw_version). Scan VRAM
+	// downward from the region4 (mailbox) anchor for the magic and decode the
+	// real fw_version — the apples-to-apples value to diff against Debian's
+	// `version=0x...`. Pure MM_INDEX reads, bounded, writes nothing.
+	uint64_t vramMcBase =
+	    static_cast<uint64_t>(regReadDmu(2, 0x0475) & 0xffffff) << 24;
+	if (region4Mc <= vramMcBase) {
+		FBLOG("dmubver: region4 mc below vram base — skipping fw-meta scan");
+		return;
+	}
+	uint64_t region4Off = region4Mc - vramMcBase;
+	constexpr uint32_t kMetaMagic = 0x444d5542;   // "DMUB"
+	constexpr uint64_t kScanBytes = 0x100000;     // 1 MiB below the mailbox
+	uint64_t found = 0;
+	for (uint64_t off = 4; off <= kScanBytes && off <= region4Off; off += 4) {
+		if (vramRead32(region4Off - off) == kMetaMagic) {
+			found = region4Off - off;
+			break;
+		}
+	}
+	if (!found) {
+		FBLOG("dmubver: fw-meta magic not found in 1MiB below region4 "
+		      "(widen scan or dump the CW region map)");
+		return;
+	}
+	uint32_t fwRegion = vramRead32(found + 4);
+	uint32_t traceBuf = vramRead32(found + 8);
+	uint32_t fwVersion = vramRead32(found + 12);
+	FBLOG("dmubver: fw-meta @ vram+0x%llx fw_version=0x%08x "
+	      "region_size=0x%x trace_buf=0x%x",
+	      found, fwVersion, fwRegion, traceBuf);
+	FBLOG("dmubver: fw_version 0x%08x %s Debian 0x00010300 — match => same "
+	      "blob, mainline VBIOS subtypes 0/1/2 safe to replay",
+	      fwVersion, fwVersion == 0x00010300 ? "==" : "!=");
 }
 
 void RDNA4FB::dmubPing() {
